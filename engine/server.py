@@ -35,7 +35,7 @@ class _SessionStream:
     segmenter: Segmenter
     last_preview: float = 0.0  # monotonic time of the last live preview for this stream
 SESSION_TICK_S = 1.0  # how often the live audio is taken from the recorder
-PREVIEW_INTERVAL_S = 2.0  # live preview refresh, the model is busy for part of this on a slow GPU
+PREVIEW_INTERVAL_S = 0.5  # pause between live previews, one pass on the GPU takes about 0.7 s with the large model
 PREVIEW_WINDOW_S = 10.0  # a preview only transcribes the newest seconds, so it stays cheap
 PREVIEW_MIN_S = 1.0  # shorter speech is too little to show
 DICTATION_PREVIEW_MAX_S = 30.0  # a held key rarely lasts longer, the preview shows the newest part of it

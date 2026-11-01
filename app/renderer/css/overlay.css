@@ -188,6 +188,11 @@ body[data-axis='v'] .copy-panel { bottom: auto; top: 50%; --panel-shift: transla
 .copy-actions { display: flex; justify-content: flex-end; }
 /* live dictation: the text grows above the pill while the key is held, it is not interactive */
 .live-panel { pointer-events: none; }
+/* the panel is dark, so the default white scrollbar stands out: a thin one in the panel colours instead */
+.copy-text { scrollbar-width: thin; scrollbar-color: var(--vast-700) transparent; }
+.copy-text::-webkit-scrollbar { width: 6px; }
+.copy-text::-webkit-scrollbar-track { background: transparent; }
+.copy-text::-webkit-scrollbar-thumb { background: var(--vast-700); border-radius: 6px; }
 .live-panel .copy-text { padding-right: 0; color: var(--vast-700); font-style: italic; }
 .copy-btn {
   padding: 6px 16px; border: none; border-radius: 999px; cursor: pointer;
