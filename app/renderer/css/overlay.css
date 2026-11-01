@@ -52,10 +52,10 @@ body[data-axis='v'] .hot-area { padding: 16px 6px; }
 .bubble[data-state='loading'] { opacity: 0.5; }
 .bubble[data-state='ready'] { --w: 50px; --h: 30px; cursor: pointer; }
 .bubble[data-state='ready']:hover { background-color: var(--vast-900); border-color: var(--vast-700); }
-.bubble[data-state='ptt'] { --w: 73px; --h: 30px; }
-.bubble[data-state='popo'] { --w: 102.5px; --h: 30px; }
-.bubble[data-state='processing'] { --w: 98px; --h: 30px; padding: 6px 12px; }
-.bubble[data-state='error'] { --w: 91px; --h: 30px; border: 1.5px solid var(--destructive); gap: 2px; padding: 6px; cursor: pointer; }
+.bubble[data-state='ptt'] { --w: 86px; --h: 30px; }
+.bubble[data-state='popo'] { --w: 120px; --h: 30px; }
+.bubble[data-state='processing'] { --w: 110px; --h: 30px; padding: 6px 8px; }
+.bubble[data-state='error'] { --w: 104px; --h: 30px; border: 1.5px solid var(--destructive); gap: 2px; padding: 6px; cursor: pointer; }
 
 .row { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 4px; flex-shrink: 0; }
 .bubble[data-state='processing'] .row { gap: 6px; }
@@ -79,7 +79,7 @@ body[data-axis='v'] .hot-area { padding: 16px 6px; }
 /* ---- waveform ------------------------------------------------------------- */
 .waveform {
   display: none; flex-direction: row; align-items: center; justify-content: center; flex-shrink: 0;
-  width: auto; height: 18px; padding: 8px 4px; gap: 2px;
+  width: auto; height: 18px; padding: 8px 2px; gap: 2px;
 }
 .bubble[data-state='ptt'] .waveform,
 .bubble[data-state='popo'] .waveform,
