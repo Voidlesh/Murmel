@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -24,6 +25,13 @@ HOST, PORT = "127.0.0.1", 47821
 MIN_DURATION_S = 0.35
 KEEP_AUDIO_FILES = 200
 SESSION_KEEP_AUDIO = 50  # session recordings kept on disk, counted separately from dictations
+
+
+@dataclass
+class _SessionStream:
+    speaker: str  # "you" (microphone) or "them" (system audio)
+    recorder: audio.Recorder
+    segmenter: Segmenter
 SESSION_TICK_S = 1.0  # how often the live audio is taken from the recorder
 LEVEL_INTERVAL_S = 0.1  # mean of the scaled block levels per window
 ALLOWED_ORIGINS = {None, "null", "file://"}
@@ -47,6 +55,7 @@ class Engine:
         self._target: tuple[str, str] = ("", "")
         self._started_at = 0.0
         self.recorder = audio.Recorder(self._on_level)
+        self._system_recorder = audio.Recorder(lambda _bands: None)  # Systemaudio, nur für Sitzungen
         self.ducker = ducking.Ducker(config.DATA_DIR / "duck_state.json")
         self.hotkey = HotkeyController(
             on_start=lambda: self._threadsafe(self.start_recording),
@@ -63,7 +72,6 @@ class Engine:
         self.session_id: int | None = None
         self._session_running = False
         self._session_task: asyncio.Task | None = None
-        self._session_segmenter: Segmenter | None = None
         self._session_wav: audio.WavWriter | None = None
 
     # --- lifecycle ---------------------------------------------------------
@@ -297,14 +305,28 @@ class Engine:
                 wav.close()
             store.finish_session(session["id"], time.time(), "error")
             raise ValueError(f"Aufnahme konnte nicht starten: {exc}") from exc
+        streams = self._start_session_streams()
         self.session_id = session["id"]
         self._session_running = True
-        self._session_segmenter = Segmenter()
         self._session_wav = wav
         self.session_hotkey.set_recording(True)
-        self._session_task = asyncio.create_task(self._session_loop(session["id"]))
+        self._session_task = asyncio.create_task(self._session_loop(session["id"], streams))
         await self.broadcast({"type": "session_status", "session": session})
+        if len(streams) == 1 and self.settings.get("session_system_audio"):
+            await self.broadcast({"type": "notice", "text": "Systemaudio ist nicht verfügbar, nur dein Mikrofon wird aufgenommen"})
         return session
+
+    def _start_session_streams(self) -> list["_SessionStream"]:
+        """Microphone is 'you'. System audio (the other side of a call) is 'them' and is optional."""
+        streams = [_SessionStream("you", self.recorder, Segmenter())]
+        if self.settings.get("session_system_audio"):
+            try:
+                self._system_recorder.start(loopback=True)
+            except Exception:  # noqa: BLE001 - the session keeps going with the microphone alone
+                log.exception("Systemaudio-Aufnahme konnte nicht starten")
+            else:
+                streams.append(_SessionStream("them", self._system_recorder, Segmenter()))
+        return streams
 
     async def api_session_stop(self) -> dict[str, Any]:
         if self.session_id is None or self._session_task is None:
@@ -322,16 +344,18 @@ class Engine:
         self._require_store().set_session_audio(session_id, str(path))
         return audio.WavWriter(path)
 
-    async def _session_loop(self, session_id: int) -> None:
+    async def _session_loop(self, session_id: int, streams: list["_SessionStream"]) -> None:
         store = self._require_store()
         try:
             while self._session_running:
                 await asyncio.sleep(SESSION_TICK_S)
-                await self._session_feed(session_id, self.recorder.drain())
-            await self._session_feed(session_id, self.recorder.stop())
-            last = self._session_segmenter.flush()
-            if last:
-                await self._session_save(session_id, last)
+                for stream in streams:
+                    await self._session_feed(session_id, stream, stream.recorder.drain())
+            for stream in streams:
+                await self._session_feed(session_id, stream, stream.recorder.stop())
+                last = stream.segmenter.flush()
+                if last:
+                    await self._session_save(session_id, stream.speaker, last)
             store.finish_session(session_id, time.time(), "done")
             if self.settings["llm"].get("enabled"):
                 await self._run_summary(session_id)
@@ -339,8 +363,9 @@ class Engine:
             log.exception("Sitzung fehlgeschlagen")
             store.finish_session(session_id, time.time(), "error")
         finally:
-            if self.recorder.active:
-                self.recorder.stop()
+            for stream in streams:
+                if stream.recorder.active:
+                    stream.recorder.stop()
             if self._session_wav:
                 self._session_wav.close()
                 self._session_wav = None
@@ -348,19 +373,21 @@ class Engine:
         self._prune_session_audio(store)
         await self.broadcast({"type": "session_status", "session": store.get_session(session_id)})
 
-    async def _session_feed(self, session_id: int, samples: np.ndarray) -> None:
-        if self._session_wav and samples.size:
+    async def _session_feed(self, session_id: int, stream: "_SessionStream", samples: np.ndarray) -> None:
+        if stream.speaker == "you" and self._session_wav and samples.size:  # the saved audio is the microphone
             self._session_wav.write(samples)
-        for segment in self._session_segmenter.feed(samples):
-            await self._session_save(session_id, segment)
+        for segment in stream.segmenter.feed(samples):
+            await self._session_save(session_id, stream.speaker, segment)
 
-    async def _session_save(self, session_id: int, segment: Segment) -> None:
+    async def _session_save(self, session_id: int, speaker: str, segment: Segment) -> None:
         if segment.end_s - segment.start_s < MIN_DURATION_S:  # too short to transcribe reliably
             return
         text = await asyncio.to_thread(self._transcribe_session_segment, segment.samples)
         if not text:
             return
-        row = self._require_store().add_session_segment(session_id, segment.start_s, segment.end_s, text)
+        row = self._require_store().add_session_segment(
+            session_id, segment.start_s, segment.end_s, text, speaker=speaker
+        )
         await self.broadcast({"type": "session_segment", "session_id": session_id, "segment": row})
 
     def _transcribe_session_segment(self, samples: np.ndarray) -> str:

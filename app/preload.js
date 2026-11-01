@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('murmel', {
   maximize: () => ipcRenderer.send('window:maximize'),
   close: () => ipcRenderer.send('window:close'),
   showMain: () => ipcRenderer.send('app:show'),
+  showPage: (page) => ipcRenderer.send('app:show-page', String(page)),
+  onNavigate: (cb) => ipcRenderer.on('app:navigate', (_e, page) => cb(page)),
   quit: () => ipcRenderer.send('app:quit'),
   setOverlayInteractive: (on) => ipcRenderer.send('overlay:interactive', Boolean(on)),
   getOverlayDock: () => ipcRenderer.invoke('overlay:get-dock'),

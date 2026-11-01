@@ -71,35 +71,60 @@ def list_microphones() -> list[dict]:
     return mics
 
 
+def loopback_device() -> int | None:
+    """Default playback device, which WASAPI loopback records (so Discord, Teams and browsers are captured)."""
+    wasapi = next((i for i, api in enumerate(sd.query_hostapis()) if api["name"] == "Windows WASAPI"), None)
+    if wasapi is None:
+        return None
+    output = sd.query_hostapis(wasapi)["default_output_device"]
+    return output if output >= 0 else None
+
+
 class Recorder:
     def __init__(self, on_level: Callable[[np.ndarray], None]) -> None:
         self._on_level = on_level
         self._chunks: list[np.ndarray] = []
         self._stream: sd.InputStream | None = None
+        self._loopback = False
         self._lock = threading.Lock()
 
     @property
     def active(self) -> bool:
         return self._stream is not None
 
-    def start(self, device: int | None = None) -> None:
+    def start(self, device: int | None = None, loopback: bool = False) -> None:
         with self._lock:
             if self._stream:
                 return
             self._chunks = []
-            self._stream = sd.InputStream(
+            self._loopback = loopback
+            self._stream = self._open_stream(device, loopback)
+            self._stream.start()
+
+    def _open_stream(self, device: int | None, loopback: bool) -> sd.InputStream:
+        if not loopback:
+            return sd.InputStream(
                 samplerate=SAMPLE_RATE, channels=1, dtype="float32", blocksize=BLOCK,
                 device=device, callback=self._callback,
             )
-            self._stream.start()
+        output = loopback_device()
+        if output is None:
+            raise RuntimeError("Keine Wiedergabe gefunden, Systemaudio ist nicht verfügbar")
+        channels = int(sd.query_devices(output)["max_output_channels"])
+        return sd.InputStream(
+            samplerate=SAMPLE_RATE, channels=channels, dtype="float32", blocksize=BLOCK,
+            device=output, extra_settings=sd.WasapiSettings(loopback=True, auto_convert=True),
+            callback=self._callback,
+        )
 
     def _callback(self, data: np.ndarray, _frames: int, _time, status) -> None:
         if status:
             log.debug("audio status: %s", status)
-        mono = data[:, 0].copy()
+        mono = data.mean(axis=1, dtype=np.float32)  # loopback may deliver stereo, the mic mono
         with self._lock:
             self._chunks.append(mono)
-        self._on_level(band_levels_db(mono))
+        if not self._loopback:  # the island bars follow the microphone only
+            self._on_level(band_levels_db(mono))
 
     def drain(self) -> np.ndarray:
         """Take the samples recorded since the last drain, so long sessions do not grow in memory."""

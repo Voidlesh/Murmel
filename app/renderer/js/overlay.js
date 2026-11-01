@@ -201,13 +201,13 @@ let sessionLive = false;
 
 function notesTipHtml() {
   return sessionLive
-    ? '<b>Notizen-Aufnahme beenden</b><span>Das Transkript wird gespeichert und zusammengefasst</span>'
+    ? '<b>Live-Transkript öffnen</b><span>Stopp und Zusammenfassung sind in der Notizen-Ansicht</span>'
     : '<b>Notizen-Aufnahme starten</b><span>Transkript, Notizen und Aufgaben für jede Aufnahme</span>';
 }
 
 function renderNotes() {
   notesBtn.classList.toggle('live', sessionLive);
-  notesBtn.setAttribute('aria-label', sessionLive ? 'Notizen-Aufnahme beenden' : 'Notizen-Aufnahme starten');
+  notesBtn.setAttribute('aria-label', sessionLive ? 'Live-Transkript öffnen' : 'Notizen-Aufnahme starten');
 }
 
 on('session_status', (msg) => {
@@ -223,8 +223,13 @@ notesBtn.addEventListener('mouseleave', () => {
   hideTooltip();
 });
 notesBtn.addEventListener('click', async () => {
+  if (sessionLive) {
+    window.murmel.showPage('notes'); // a running session opens its live view instead
+    hideTooltip();
+    return;
+  }
   try {
-    await call(sessionLive ? 'session_stop' : 'session_start', {});
+    await call('session_start', {});
     hideTooltip();
   } catch (err) {
     showTooltip(err.message);

@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS session_segments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL,
+    speaker TEXT NOT NULL DEFAULT 'you',       -- you | them
     start_s REAL NOT NULL,
     end_s REAL NOT NULL,
     text TEXT NOT NULL
@@ -65,6 +66,7 @@ CREATE INDEX IF NOT EXISTS idx_segments_session ON session_segments(session_id, 
 """
 
 MAX_PAGE = 500
+SEGMENT_SPEAKER_MIGRATION = "ALTER TABLE session_segments ADD COLUMN speaker TEXT NOT NULL DEFAULT 'you'"  # older sessions had one speaker
 MIGRATIONS = (
     "ALTER TABLE transcripts ADD COLUMN fixes_words INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE transcripts ADD COLUMN fixes_dict INTEGER NOT NULL DEFAULT 0",
@@ -84,6 +86,9 @@ class Store:
             for sql in MIGRATIONS:
                 if sql.split("ADD COLUMN ")[1].split()[0] not in columns:
                     self._db.execute(sql)
+            segment_columns = {r[1] for r in self._db.execute("PRAGMA table_info(session_segments)")}
+            if "speaker" not in segment_columns:
+                self._db.execute(SEGMENT_SPEAKER_MIGRATION)
             self._db.commit()
 
     def close(self) -> None:
@@ -186,10 +191,12 @@ class Store:
         )
         return [_decode_session(r) for r in rows]
 
-    def add_session_segment(self, session_id: int, start_s: float, end_s: float, text: str) -> dict[str, Any]:
+    def add_session_segment(
+        self, session_id: int, start_s: float, end_s: float, text: str, speaker: str = "you"
+    ) -> dict[str, Any]:
         new_id = self._write(
-            "INSERT INTO session_segments (session_id, start_s, end_s, text) VALUES (?,?,?,?)",
-            (session_id, start_s, end_s, text),
+            "INSERT INTO session_segments (session_id, speaker, start_s, end_s, text) VALUES (?,?,?,?,?)",
+            (session_id, speaker, start_s, end_s, text),
         )
         return self._query("SELECT * FROM session_segments WHERE id=?", (new_id,))[0]
 

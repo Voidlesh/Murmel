@@ -31,6 +31,7 @@ DEFAULTS: dict[str, Any] = {
     "keep_audio": True,
     "session_hotkey": "",
     "session_keep_audio": True,
+    "session_system_audio": True,  # the other side of a call, via WASAPI loopback
     "remove_fillers": True,
     "voice_commands": True,
     "typing_wpm": 40,

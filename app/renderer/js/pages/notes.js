@@ -4,6 +4,7 @@ const SAVE_DELAY_MS = 800;
 const TABS = [['transcript', 'Transkript'], ['summary', 'Zusammenfassung'], ['notes', 'Notizen']];
 const STATUS_LABEL = { recording: 'Läuft', processing: 'Fasst zusammen …', done: 'Fertig', error: 'Fehler' };
 const STATUS_BADGE = { recording: 'teal', processing: 'amber', done: '', error: '' };
+const SPEAKER_LABEL = { you: 'Du', them: 'Gegenüber' };
 
 let root;
 let ctx;
@@ -154,8 +155,27 @@ function transcriptHtml() {
       ? 'Die ersten Abschnitte erscheinen, sobald du gesprochen hast.'
       : (needle ? 'Keine Treffer.' : 'In dieser Sitzung wurde nichts erkannt.'));
   }
-  return `<div class="seg-list">${segments.map((s) => `
-    <p class="segment"><time>${clock(s.start_s)}</time><span>${escapeHtml(s.text)}</span></p>`).join('')}</div>`;
+  const ordered = [...segments].sort((a, b) => a.start_s - b.start_s); // "you" and "them" arrive from two streams
+  return `<div class="seg-list">${turnsOf(ordered).map(turnHtml).join('')}</div>`;
+}
+
+// Consecutive segments of one speaker form a turn, shown as one group of chat bubbles
+function turnsOf(segments) {
+  return segments.reduce((turns, s) => {
+    const last = turns[turns.length - 1];
+    if (last && last.speaker === s.speaker) last.segments.push(s);
+    else turns.push({ speaker: s.speaker, segments: [s] });
+    return turns;
+  }, []);
+}
+
+function turnHtml(turn) {
+  const label = SPEAKER_LABEL[turn.speaker] ?? escapeHtml(turn.speaker);
+  return `
+    <div class="turn turn-${turn.speaker}">
+      <span class="turn-label">${label} · ${clock(turn.segments[0].start_s)}</span>
+      ${turn.segments.map((s) => `<p class="bubble">${escapeHtml(s.text)}</p>`).join('')}
+    </div>`;
 }
 
 function summaryHtml() {

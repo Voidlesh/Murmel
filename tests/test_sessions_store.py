@@ -64,3 +64,13 @@ def test_session_audio_pruning_keeps_newest(store):
     assert [path for _, path in store.session_audio_paths_beyond(2)] == [f"/audio/{ids[0]}.wav"]
     store.clear_session_audio_path(ids[0])
     assert store.session_audio_paths_beyond(2) == []
+
+
+def test_segments_keep_their_speaker_and_default_to_you(store):
+    session = store.create_session("Call", started_at=1.0, language="de")
+    store.add_session_segment(session["id"], 0.0, 2.0, "Hallo von mir.")
+    store.add_session_segment(session["id"], 2.0, 4.0, "Hallo zurück.", speaker="them")
+
+    speakers = [seg["speaker"] for seg in store.session_segments(session["id"])]
+
+    assert speakers == ["you", "them"]

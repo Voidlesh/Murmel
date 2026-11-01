@@ -172,9 +172,13 @@
 .notes-tools .tab-search .search-input { width: 220px; }
 #n-actions .btn { white-space: nowrap; }
 .seg-list { display: grid; gap: 2px; max-height: 60vh; overflow-y: auto; }
-.segment { display: grid; grid-template-columns: 48px 1fr; gap: 12px; padding: 8px 10px; border-radius: 8px; line-height: 1.55; transition: background var(--fast); }
-.segment:hover { background: var(--card-2); }
-.segment time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12.5px; padding-top: 2px; }
+/* transcript turns: one speaker per group, "Du" on the right, "Gegenüber" on the left */
+.turn { display: flex; flex-direction: column; gap: 4px; padding: 6px 4px; }
+.turn-label { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.turn-you { align-items: flex-end; }
+.turn-them { align-items: flex-start; }
+.bubble { max-width: 78%; margin: 0; padding: 8px 12px; border-radius: var(--r-md); background: var(--card-2); line-height: 1.5; }
+.turn-you .bubble { background: var(--teal-2); color: #fff; }
 .summary-text { white-space: pre-wrap; line-height: 1.6; font-family: var(--font-serif); font-size: 16px; }
 .tasks-head { margin: 18px 0 8px; font-size: 13px; color: var(--text-2); }
 .task-list { display: grid; gap: 6px; padding-left: 18px; list-style: disc; }

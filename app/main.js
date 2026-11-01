@@ -165,6 +165,10 @@ function registerIpc() {
   ipcMain.on('window:maximize', () => (mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow?.maximize()));
   ipcMain.on('window:close', () => mainWindow?.hide());
   ipcMain.on('app:show', showMain);
+  ipcMain.on('app:show-page', (_e, page) => {
+    showMain();
+    mainWindow?.webContents.send('app:navigate', page);
+  });
   ipcMain.on('app:quit', () => { quitting = true; app.quit(); });
   ipcMain.on('overlay:interactive', (_e, interactive) => {
     overlayWindow?.setIgnoreMouseEvents(!interactive, { forward: true });
