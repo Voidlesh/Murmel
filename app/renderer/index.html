@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="de" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; connect-src ws://127.0.0.1:47821; img-src 'self' data:; media-src 'self' file:; style-src 'self'; font-src 'self'; script-src 'self'" />
+  <title>Murmel</title>
+  <link rel="stylesheet" href="../node_modules/@fontsource-variable/figtree/index.css" />
+  <link rel="stylesheet" href="../node_modules/@fontsource-variable/eb-garamond/index.css" />
+  <link rel="stylesheet" href="../node_modules/@fontsource-variable/eb-garamond/wght-italic.css" />
+  <link rel="stylesheet" href="css/icons.css" />
+  <link rel="stylesheet" href="css/app.css" />
+  <link rel="stylesheet" href="css/pages.css" />
+  <link rel="stylesheet" href="css/auth.css" />
+</head>
+<body>
+  <header class="titlebar">
+    <div class="titlebar-left">
+      <button class="tb-btn" id="btn-sidebar" title="Seitenleiste" aria-label="Seitenleiste umschalten"><span class="ic i-panel-left"></span></button>
+      <div class="account-menu" id="account-menu">
+        <button class="tb-btn" id="btn-account" title="Account" aria-label="Account-Menü" aria-haspopup="menu"><span class="ic i-circle-user-round"></span></button>
+      </div>
+    </div>
+    <div class="titlebar-right">
+      <div class="engine-status" id="engine-status"><i class="dot"></i><span>Verbinde …</span></div>
+      <button class="tb-btn" id="btn-theme" title="Hell/Dunkel" aria-label="Farbschema wechseln"><span class="ic i-sun"></span></button>
+      <div class="win-controls">
+        <button id="win-min" aria-label="Minimieren"><span class="ic i-minus"></span></button>
+        <button id="win-max" aria-label="Maximieren"><span class="ic i-square"></span></button>
+        <button id="win-close" class="close" aria-label="Schließen"><span class="ic i-x"></span></button>
+      </div>
+    </div>
+  </header>
+
+  <div class="shell" id="shell">
+    <nav class="sidebar" aria-label="Navigation">
+      <div class="brand"><span class="brand-mark"><i></i><i></i><i></i><i></i></span>Murmel</div>
+      <ul class="nav">
+        <li><button data-page="home" class="active"><span class="ic i-mic"></span>Diktat</button></li>
+        <li><button data-page="insights"><span class="ic i-chart-column"></span>Insights</button></li>
+        <li><button data-page="dictionary"><span class="ic i-book-open"></span>Wörterbuch</button></li>
+        <li><button data-page="snippets"><span class="ic i-scissors"></span>Snippets</button></li>
+        <li><button data-page="style"><span class="ic i-type"></span>Stil</button></li>
+      </ul>
+      <section class="onboarding" id="onboarding" aria-label="Erste Schritte"></section>
+      <div class="sidebar-foot">
+        <button data-page="settings" id="btn-settings"><span class="ic i-settings"></span>Einstellungen</button>
+      </div>
+    </nav>
+
+    <main class="panel" id="panel">
+      <section class="page active" id="page-home"></section>
+      <section class="page" id="page-insights"></section>
+      <section class="page narrow-page" id="page-dictionary"></section>
+      <section class="page narrow-page" id="page-snippets"></section>
+      <section class="page" id="page-style"></section>
+      <section class="page narrow-page" id="page-settings"></section>
+    </main>
+  </div>
+
+  <div class="auth-screen" id="auth" hidden></div>
+  <div class="toast-stack" id="toasts" aria-live="polite"></div>
+  <div class="modal-backdrop" id="modal" hidden></div>
+  <audio id="player" hidden></audio>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

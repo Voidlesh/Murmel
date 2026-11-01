@@ -1,0 +1,21 @@
+﻿{
+  "name": "murmel",
+  "version": "1.0.0",
+  "description": "Lokale Diktier-App",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "icons": "node scripts/make-icon.js && node scripts/make-icons-css.js"
+  },
+  "license": "MIT",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^45.2.1"
+  },
+  "dependencies": {
+    "@fontsource-variable/eb-garamond": "^5.3.0",
+    "@fontsource-variable/figtree": "^5.3.0",
+    "lucide-static": "^1.66.0"
+  }
+}

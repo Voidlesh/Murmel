@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Electron / Node
+app/node_modules/
+app/dist/
+app/out/
+npm-debug.log*
+
+# Murmel runtime data (accounts, history, audio, logs) – may contain personal dictation
+*.db
+*.db-journal
+settings.json
+engine.log*
+audio/
+accounts/
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+*.swp

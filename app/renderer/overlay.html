@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; connect-src ws://127.0.0.1:47821; style-src 'self'; font-src 'self'; script-src 'self'" />
+  <title>Murmel Overlay</title>
+  <link rel="stylesheet" href="../node_modules/@fontsource-variable/figtree/index.css" />
+  <link rel="stylesheet" href="css/overlay.css" />
+</head>
+<body data-dock="bottom" data-axis="h">
+  <div class="stage">
+    <div class="tooltip" id="tooltip" role="status" aria-live="polite"></div>
+    <div class="copy-panel" id="copy-panel" role="dialog" aria-label="Diktat zum Kopieren" hidden>
+      <button class="copy-close" id="copy-close" aria-label="Schließen">
+        <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+      <p class="copy-text" id="copy-text"></p>
+      <div class="copy-actions">
+        <button class="copy-btn" id="copy-btn">Kopieren</button>
+      </div>
+    </div>
+    <div class="hot-area" id="hot-area">
+      <div class="bubble" id="bubble" data-state="loading" aria-label="Murmel Diktat">
+        <div class="row">
+          <button class="bar-btn" id="btn-cancel" aria-label="Abbrechen">
+            <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+          <span class="mic"><svg viewBox="0 0 24 24"><path d="M12 19v3"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><rect x="9" y="2" width="6" height="13" rx="3"/></svg></span>
+          <div class="waveform" id="waveform"></div>
+          <div class="spinner" id="spinner"></div>
+          <span class="err"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>Fehler</span>
+          <button class="bar-btn stop" id="btn-stop" aria-label="Fertig und einfügen">
+            <svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="drag-layer" id="drag-layer" aria-hidden="true">
+    <div class="zone" data-dock="top"></div>
+    <div class="zone vertical" data-dock="left"></div>
+    <div class="zone vertical" data-dock="right"></div>
+    <div class="zone" data-dock="bottom"></div>
+    <div class="dragger" id="dragger"></div>
+  </div>
+  <script type="module" src="js/overlay.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+# Murmel engine – runtime dependencies (Windows, Python 3.12)
+# Install with: .venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# Speech recognition
+faster-whisper==1.2.1
+
+# NVIDIA CUDA runtime for GPU acceleration (optional – omit on CPU-only machines)
+nvidia-cublas-cu12==12.9.2.10
+nvidia-cudnn-cu12==9.27.0.42
+nvidia-cuda-nvrtc-cu12==12.9.86
+
+# Audio capture and Windows integration
+sounddevice==0.5.6
+keyboard==0.13.5
+pycaw==20260927
+comtypes==1.4.17
+psutil==7.2.2
+
+# Local API (WebSocket server for the Electron UI)
+websockets==17.4
+
+# Numerics and image helpers
+numpy==2.5.4
+pillow==13.0.0
