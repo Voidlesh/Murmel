@@ -1,10 +1,10 @@
 import { escapeHtml, num, timeOfDay, dayLabel, duration } from '../format.js';
+import { clearLivePreview, clock, livePreviewHtml, resetLivePreview, setLivePreview, transcriptHtml } from '../transcript.js';
 
 const SAVE_DELAY_MS = 800;
 const TABS = [['transcript', 'Transkript'], ['summary', 'Zusammenfassung'], ['notes', 'Notizen']];
 const STATUS_LABEL = { recording: 'Läuft', processing: 'Fasst zusammen …', done: 'Fertig', error: 'Fehler' };
 const STATUS_BADGE = { recording: 'teal', processing: 'amber', done: '', error: '' };
-const SPEAKER_LABEL = { you: 'Du', them: 'Gegenüber' };
 
 let root;
 let ctx;
@@ -68,6 +68,7 @@ function renderAll() {
 // ---- engine events (pushed by the engine, see app.js) -------------------------
 export function onSessionStatus(session) {
   if (!root) return;
+  if (session.status !== 'recording') resetLivePreview();
   const known = sessions.some((s) => s.id === session.id);
   sessions = known
     ? sessions.map((s) => (s.id === session.id ? { ...s, ...session } : s))
@@ -84,8 +85,15 @@ export function onSessionStatus(session) {
 
 export function onSessionSegment({ session_id: sessionId, segment }) {
   if (!root || sessionId !== selectedId || !detail) return;
+  clearLivePreview(segment.speaker);
   if (detail.segments.some((s) => s.id === segment.id)) return;
   detail = { ...detail, segments: [...detail.segments, segment] };
+  if (tab === 'transcript') renderBody();
+}
+
+export function onSessionPreview(msg) {
+  if (!root || msg.session_id !== selectedId || !detail) return;
+  setLivePreview(msg);
   if (tab === 'transcript') renderBody();
 }
 
@@ -142,40 +150,21 @@ function searchHtml() {
 function renderBody() {
   const body = root.querySelector('#n-body');
   if (!body || !detail) return;
-  if (tab === 'transcript') body.innerHTML = transcriptHtml();
+  if (tab === 'transcript') body.innerHTML = transcriptPaneHtml();
   if (tab === 'summary') body.innerHTML = summaryHtml();
   if (tab === 'notes') body.innerHTML = notesHtml();
 }
 
-function transcriptHtml() {
+function transcriptPaneHtml() {
   const needle = query.trim().toLowerCase();
   const segments = (detail.segments || []).filter((s) => !needle || s.text.toLowerCase().includes(needle));
-  if (!segments.length) {
+  const live = needle ? '' : livePreviewHtml();
+  if (!segments.length && !live) {
     return empty(detail.status === 'recording'
       ? 'Die ersten Abschnitte erscheinen, sobald du gesprochen hast.'
       : (needle ? 'Keine Treffer.' : 'In dieser Sitzung wurde nichts erkannt.'));
   }
-  const ordered = [...segments].sort((a, b) => a.start_s - b.start_s); // "you" and "them" arrive from two streams
-  return `<div class="seg-list">${turnsOf(ordered).map(turnHtml).join('')}</div>`;
-}
-
-// Consecutive segments of one speaker form a turn, shown as one group of chat bubbles
-function turnsOf(segments) {
-  return segments.reduce((turns, s) => {
-    const last = turns[turns.length - 1];
-    if (last && last.speaker === s.speaker) last.segments.push(s);
-    else turns.push({ speaker: s.speaker, segments: [s] });
-    return turns;
-  }, []);
-}
-
-function turnHtml(turn) {
-  const label = SPEAKER_LABEL[turn.speaker] ?? escapeHtml(turn.speaker);
-  return `
-    <div class="turn turn-${turn.speaker}">
-      <span class="turn-label">${label} · ${clock(turn.segments[0].start_s)}</span>
-      ${turn.segments.map((s) => `<p class="bubble">${escapeHtml(s.text)}</p>`).join('')}
-    </div>`;
+  return `<div class="seg-list">${transcriptHtml(segments)}${live}</div>`;
 }
 
 function summaryHtml() {
@@ -294,12 +283,6 @@ async function flushNotes() {
 // ---- helpers --------------------------------------------------------------------------
 function empty(text) {
   return `<div class="empty"><p>${escapeHtml(text)}</p></div>`;
-}
-
-function clock(seconds) {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 function meta() {

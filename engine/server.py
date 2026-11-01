@@ -32,7 +32,11 @@ class _SessionStream:
     speaker: str  # "you" (microphone) or "them" (system audio)
     recorder: audio.Recorder
     segmenter: Segmenter
+    last_preview: float = 0.0  # monotonic time of the last live preview for this stream
 SESSION_TICK_S = 1.0  # how often the live audio is taken from the recorder
+PREVIEW_INTERVAL_S = 2.0  # live preview refresh, the model is busy for part of this on a slow GPU
+PREVIEW_WINDOW_S = 10.0  # a preview only transcribes the newest seconds, so it stays cheap
+PREVIEW_MIN_S = 1.0  # shorter speech is too little to show
 LEVEL_INTERVAL_S = 0.1  # mean of the scaled block levels per window
 ALLOWED_ORIGINS = {None, "null", "file://"}
 
@@ -351,6 +355,7 @@ class Engine:
                 await asyncio.sleep(SESSION_TICK_S)
                 for stream in streams:
                     await self._session_feed(session_id, stream, stream.recorder.drain())
+                    await self._session_preview(session_id, stream)
             for stream in streams:
                 await self._session_feed(session_id, stream, stream.recorder.stop())
                 last = stream.segmenter.flush()
@@ -378,6 +383,23 @@ class Engine:
             self._session_wav.write(samples)
         for segment in stream.segmenter.feed(samples):
             await self._session_save(session_id, stream.speaker, segment)
+
+    async def _session_preview(self, session_id: int, stream: "_SessionStream") -> None:
+        """Provisional text for the speech that is not cut yet. The final segment replaces it when the pause comes."""
+        if not self.settings.get("session_live_preview"):
+            return
+        now = time.monotonic()
+        if now - stream.last_preview < PREVIEW_INTERVAL_S:
+            return
+        stream.last_preview = now
+        start_s, tail = stream.segmenter.pending(int(PREVIEW_WINDOW_S * audio.SAMPLE_RATE))
+        text = ""
+        if tail.size >= int(PREVIEW_MIN_S * audio.SAMPLE_RATE) and not audio.is_silent(tail):
+            text = await asyncio.to_thread(self._transcribe_session_segment, tail)
+        await self.broadcast({
+            "type": "session_preview", "session_id": session_id, "speaker": stream.speaker,
+            "start_s": start_s, "text": text,
+        })
 
     async def _session_save(self, session_id: int, speaker: str, segment: Segment) -> None:
         if segment.end_s - segment.start_s < MIN_DURATION_S:  # too short to transcribe reliably

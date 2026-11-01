@@ -51,6 +51,8 @@ export function init(el, context) {
         <div class="hotkey-picker"><span class="kbd" id="set-session-label"></span>
           <button class="btn" id="set-session-record"><span class="ic i-keyboard"></span>Aufnehmen</button>
           <button class="btn btn-ghost" id="set-session-clear" title="Sitzungs-Taste entfernen" aria-label="Sitzungs-Taste entfernen"><span class="ic i-x"></span></button></div></div>
+      <div class="setting-row"><div><b>Live-Transkript</b><p class="hint-text">Zeigt in einer Sitzung schon beim Sprechen mit, was du sagst. Braucht mehr Rechenleistung.</p></div>
+        <label class="switch"><input type="checkbox" id="set-live"/><i></i></label></div>
       <div class="setting-row"><div><b>Tippen für Freihand-Modus</b><p class="hint-text">Kurzes Antippen startet eine Aufnahme ohne Halten.</p></div>
         <label class="switch"><input type="checkbox" id="set-tap"/><i></i></label></div>
       <div class="setting-row"><div><b>Sounds</b><p class="hint-text">Kurzer Ton bei Start und Ende.</p></div>
@@ -88,6 +90,7 @@ export function init(el, context) {
     <p class="about hint-text">Murmel · lokal mit faster-whisper · <span id="set-engine"></span></p>`;
 
   bind('#set-name', 'change', (e) => ({ user_name: e.target.value.trim() }));
+  bind('#set-live', 'change', (e) => ({ session_live_preview: e.target.checked }));
   bind('#set-tap', 'change', (e) => ({ tap_for_hands_free: e.target.checked }));
   bind('#set-sounds', 'change', (e) => ({ sounds: e.target.checked }));
   bind('#set-duck', 'change', (e) => ({ duck_audio: e.target.checked }));
@@ -225,6 +228,7 @@ function render() {
   const presets = HOTKEY_PRESETS.includes(s.hotkey) ? HOTKEY_PRESETS : [...HOTKEY_PRESETS, s.hotkey];
   root.querySelector('#set-hotkey-preset').innerHTML = presets
     .map((h) => `<option value="${escapeHtml(h)}" ${h === s.hotkey ? 'selected' : ''}>${escapeHtml(hotkeyLabel(h))}</option>`).join('');
+  root.querySelector('#set-live').checked = s.session_live_preview;
   root.querySelector('#set-tap').checked = s.tap_for_hands_free;
   root.querySelector('#set-sounds').checked = s.sounds;
   root.querySelector('#set-duck').checked = s.duck_audio;

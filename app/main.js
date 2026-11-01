@@ -153,6 +153,34 @@ function createTray() {
   tray.on('click', showMain);
 }
 
+let sessionWindow = null;
+
+function showSession(id) {
+  if (!sessionWindow) {
+    sessionWindow = new BrowserWindow({
+      width: 460,
+      height: 720,
+      minWidth: 380,
+      minHeight: 460,
+      frame: false,
+      backgroundColor: '#161616',
+      icon: ICON_PATH,
+      show: false,
+      webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true },
+    });
+    sessionWindow.loadFile(path.join(__dirname, 'renderer', 'session.html'), { query: { session: String(id) } });
+    sessionWindow.on('close', (e) => {
+      if (!quitting) { e.preventDefault(); sessionWindow.hide(); }
+    });
+    sessionWindow.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+  } else {
+    sessionWindow.webContents.send('session:open', id);
+  }
+  if (sessionWindow.isMinimized()) sessionWindow.restore();
+  sessionWindow.show();
+  sessionWindow.focus();
+}
+
 function showMain() {
   if (!mainWindow) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -165,10 +193,8 @@ function registerIpc() {
   ipcMain.on('window:maximize', () => (mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow?.maximize()));
   ipcMain.on('window:close', () => mainWindow?.hide());
   ipcMain.on('app:show', showMain);
-  ipcMain.on('app:show-page', (_e, page) => {
-    showMain();
-    mainWindow?.webContents.send('app:navigate', page);
-  });
+  ipcMain.on('session:show', (_e, id) => showSession(Number(id)));
+  ipcMain.on('session:close', () => sessionWindow?.hide());
   ipcMain.on('app:quit', () => { quitting = true; app.quit(); });
   ipcMain.on('overlay:interactive', (_e, interactive) => {
     overlayWindow?.setIgnoreMouseEvents(!interactive, { forward: true });

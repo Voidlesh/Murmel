@@ -198,10 +198,11 @@ document.getElementById('btn-stop').addEventListener('click', () => call('toggle
 // ---- notes: start/stop a long session from the island ---------------------------------------
 const notesBtn = document.getElementById('btn-notes');
 let sessionLive = false;
+let liveSessionId = null;
 
 function notesTipHtml() {
   return sessionLive
-    ? '<b>Live-Transkript öffnen</b><span>Stopp und Zusammenfassung sind in der Notizen-Ansicht</span>'
+    ? '<b>Live-Transkript öffnen</b><span>Zeigt Transkript und Notizen der laufenden Aufnahme</span>'
     : '<b>Notizen-Aufnahme starten</b><span>Transkript, Notizen und Aufgaben für jede Aufnahme</span>';
 }
 
@@ -212,6 +213,7 @@ function renderNotes() {
 
 on('session_status', (msg) => {
   sessionLive = msg.session?.status === 'recording';
+  if (sessionLive) liveSessionId = msg.session.id;
   renderNotes();
 });
 notesBtn.addEventListener('mouseenter', () => {
@@ -224,7 +226,7 @@ notesBtn.addEventListener('mouseleave', () => {
 });
 notesBtn.addEventListener('click', async () => {
   if (sessionLive) {
-    window.murmel.showPage('notes'); // a running session opens its live view instead
+    window.murmel.showSession(liveSessionId); // a running session opens its live window instead
     hideTooltip();
     return;
   }

@@ -34,6 +34,11 @@ class Segmenter:
             out.append(self._take(cut))
         return out
 
+    def pending(self, max_samples: int) -> tuple[float, np.ndarray]:
+        """The not yet cut tail of the audio, so a live preview only ever transcribes the newest part."""
+        tail = self._buffer[-max_samples:]
+        return (self._offset + self._buffer.size - tail.size) / self._rate, tail
+
     def flush(self) -> Segment | None:
         if is_silent(self._buffer):
             self._buffer = np.zeros(0, dtype=np.float32)

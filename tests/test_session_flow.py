@@ -208,3 +208,45 @@ def test_valid_session_hotkey_is_saved_and_reconnected(engine, monkeypatch):
     asyncio.run(engine.api_set_settings({"session_hotkey": "ctrl+alt+m"}))
     assert engine.settings["session_hotkey"] == "ctrl+alt+m"
     assert calls == [True]
+
+
+def test_live_preview_is_sent_while_speech_is_still_open(engine):
+    engine.settings = {**engine.settings, "session_live_preview": True}
+    sent = []
+
+    async def capture(msg):
+        sent.append(msg)
+
+    engine.broadcast = capture
+
+    async def scenario():
+        await engine.api_session_start()
+        engine.recorder.pending = tone(3)  # no pause, so nothing is cut yet
+        await asyncio.sleep(server.SESSION_TICK_S * 2)
+        await engine.api_session_stop()
+
+    asyncio.run(scenario())
+
+    previews = [m for m in sent if m["type"] == "session_preview" and m["speaker"] == "you"]
+    assert previews
+    assert previews[0]["text"].startswith("abschnitt")
+    assert previews[0]["start_s"] == 0.0
+
+
+def test_live_preview_is_off_by_default(engine):
+    sent = []
+
+    async def capture(msg):
+        sent.append(msg)
+
+    engine.broadcast = capture
+
+    async def scenario():
+        await engine.api_session_start()
+        engine.recorder.pending = tone(3)
+        await asyncio.sleep(server.SESSION_TICK_S * 2)
+        await engine.api_session_stop()
+
+    asyncio.run(scenario())
+
+    assert not [m for m in sent if m["type"] == "session_preview"]

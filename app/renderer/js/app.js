@@ -223,8 +223,8 @@ function boot() {
     renderOnboarding();
   });
   on('session_status', (msg) => Object.values(PAGES).forEach((p) => p.onSessionStatus?.(msg.session, ctx)));
-  window.murmel.onNavigate?.((page) => navigate(page));
   on('session_segment', (msg) => Object.values(PAGES).forEach((p) => p.onSessionSegment?.(msg, ctx)));
+  on('session_preview', (msg) => Object.values(PAGES).forEach((p) => p.onSessionPreview?.(msg, ctx)));
   on('notice', (msg) => toast(msg.text));
   on('account', (msg) => {
     if (!msg.account || msg.account.id !== state.account?.id) { checkAuth(); return; }
