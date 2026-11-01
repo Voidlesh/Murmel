@@ -33,7 +33,7 @@ def test_llm_used_when_enabled_and_falls_back_on_error():
     s = settings()
     s["llm"] = {**s["llm"], "enabled": True}
 
-    def ok(text, tone, cfg, vocab):
+    def ok(text, tone, cfg, vocab, style):
         return "Poliert: " + text
 
     def boom(*_):

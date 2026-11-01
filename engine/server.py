@@ -11,7 +11,7 @@ from typing import Any, Awaitable, Callable
 import websockets
 from websockets.asyncio.server import ServerConnection
 
-from . import audio, config, ducking, insights, llm, output, pipeline, textproc
+from . import audio, config, ducking, insights, llm, output, pipeline, style, textproc
 from .accounts import AccountStore, AuthError
 from .hotkey import HotkeyController
 from .store import Store
@@ -191,7 +191,8 @@ class Engine:
         app, title = self._target
         category = output.categorize(app, title, s["style_apps"])
         processed = pipeline.process(
-            result.text, category, s, store.corrections(), store.snippets(), vocabulary, llm.polish
+            result.text, category, s, store.corrections(), store.snippets(), vocabulary, llm.polish,
+            style.build_context(store.style_edits(category)),
         )
         if not processed.text:
             return None
@@ -364,9 +365,10 @@ class Engine:
 
     async def api_preview(self, text: str, category: str = "other") -> str:
         """Run the text pipeline on typed text (used by the Style page)."""
+        store = self._require_store()
         result = await asyncio.to_thread(
-            pipeline.process, text, category, self.settings, self._require_store().corrections(),
-            self._require_store().snippets(), self._require_store().vocabulary(), llm.polish,
+            pipeline.process, text, category, self.settings, store.corrections(),
+            store.snippets(), store.vocabulary(), llm.polish, style.build_context(store.style_edits(category)),
         )
         return result.text
 

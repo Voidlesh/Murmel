@@ -47,6 +47,7 @@ MAX_PAGE = 500
 MIGRATIONS = (
     "ALTER TABLE transcripts ADD COLUMN fixes_words INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE transcripts ADD COLUMN fixes_dict INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE transcripts ADD COLUMN auto_text TEXT",
 )
 
 
@@ -112,8 +113,21 @@ class Store:
         )
 
     def update_transcript_text(self, transcript_id: int, text: str, words: int) -> dict[str, Any]:
-        self._write("UPDATE transcripts SET text=?, words=? WHERE id=?", (text, words, transcript_id))
+        # auto_text keeps Murmel's own output from before the first edit, so later edits still compare against it
+        self._write(
+            "UPDATE transcripts SET auto_text=COALESCE(auto_text, text), text=?, words=? WHERE id=?",
+            (text, words, transcript_id),
+        )
         return self.get_transcript(transcript_id)
+
+    def style_edits(self, category: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Edited transcripts of one category, newest first, for learning the user's writing style."""
+        return self._query(
+            "SELECT raw_text, auto_text, text FROM transcripts"
+            " WHERE category=? AND auto_text IS NOT NULL AND auto_text != text"
+            " ORDER BY created_at DESC LIMIT ?",
+            (category, limit),
+        )
 
     def delete_transcript(self, transcript_id: int) -> str | None:
         item = self.get_transcript(transcript_id)

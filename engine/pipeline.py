@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from . import textproc
+from .style import StyleContext, apply_final_period
 
 log = logging.getLogger(__name__)
 
@@ -25,8 +26,10 @@ def process(
     corrections: list[textproc.Correction],
     snippets: list[textproc.Snippet],
     vocabulary: list[str],
-    polish: Callable[[str, str, dict[str, Any], list[str]], str] | None = None,
+    polish: Callable[[str, str, dict[str, Any], list[str], StyleContext], str] | None = None,
+    style: StyleContext | None = None,
 ) -> PipelineResult:
+    style = style or StyleContext()
     tone = settings["style"].get(category, "formal")
     text = raw.strip()
     if settings.get("remove_fillers"):
@@ -37,12 +40,12 @@ def process(
     polished = False
     if polish and settings["llm"].get("enabled") and textproc.count_words(text) >= 3:
         try:
-            text = polish(text, tone, settings["llm"], vocabulary)
+            text = polish(text, tone, settings["llm"], vocabulary, style)
             polished = True
         except Exception:  # noqa: BLE001 - polish is best effort, rules still apply
             log.warning("KI-Polish fehlgeschlagen, nutze Regel-Ergebnis", exc_info=True)
 
-    text = textproc.apply_style(text, tone)
+    text = apply_final_period(textproc.apply_style(text, tone), style.final_period)
     fixes_words = textproc.count_changed_words(raw, text)
     text, fixes_dict = textproc.apply_corrections_counted(text, corrections)
     text = textproc.apply_snippets(text, snippets)

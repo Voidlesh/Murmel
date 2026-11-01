@@ -7,6 +7,8 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from .style import StyleContext
+
 log = logging.getLogger(__name__)
 
 TONE_RULES = {
@@ -42,26 +44,33 @@ def list_models(base_url: str, timeout: float = 3) -> list[str]:
     return [m["id"] for m in data.get("data", []) if "embed" not in m["id"]]
 
 
-def polish(text: str, tone: str, cfg: dict[str, Any], vocabulary: list[str]) -> str:
+def _dictation(text: str) -> dict[str, str]:
+    return {"role": "user", "content": f"<dictation>\n{text}\n</dictation>"}
+
+
+def polish(
+    text: str, tone: str, cfg: dict[str, Any], vocabulary: list[str], style: StyleContext | None = None
+) -> str:
     """Return polished text, or raise on any failure so the caller can fall back."""
+    style = style or StyleContext()
     base = cfg["base_url"].rstrip("/")
     model = cfg.get("model") or (list_models(base) or [""])[0]
     extra_lines = []
     if vocabulary:
         extra_lines.append("- Spell these names/terms exactly like this: " + ", ".join(vocabulary[:40]))
+    extra_lines += ["- " + line for line in style.rule_lines()]
     if cfg.get("custom_instructions"):
         extra_lines.append("- " + cfg["custom_instructions"].strip())
     system = SYSTEM_PROMPT.format(tone=TONE_RULES.get(tone, TONE_RULES["formal"]), extra="\n".join(extra_lines))
+    # few-shot: earlier dictations the user corrected, shown as dictation -> what they wanted
+    examples = [m for ex in style.examples for m in (_dictation(ex.raw), {"role": "assistant", "content": ex.final})]
     data = _post(
         base + "/chat/completions",
         {
             "model": model,
             "temperature": 0.1,
             "max_tokens": max(64, len(text) * 2),
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": f"<dictation>\n{text}\n</dictation>"},
-            ],
+            "messages": [{"role": "system", "content": system}, *examples, _dictation(text)],
         },
         timeout=float(cfg.get("timeout_s", 10)),
     )
