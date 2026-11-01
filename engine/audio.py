@@ -163,6 +163,21 @@ class Recorder:
             return np.zeros(0, dtype=np.float32)
         return np.concatenate(chunks)
 
+    def peek(self, max_samples: int) -> np.ndarray:
+        """The newest samples of the running recording, without taking them away from stop()."""
+        with self._lock:
+            chunks = list(self._chunks)
+        tail: list[np.ndarray] = []
+        total = 0
+        for chunk in reversed(chunks):
+            tail.append(chunk)
+            total += chunk.size
+            if total >= max_samples:
+                break
+        if not tail:
+            return np.zeros(0, dtype=np.float32)
+        return np.concatenate(tail[::-1])[-max_samples:]
+
     def stop(self) -> np.ndarray:
         with self._lock:
             stream, self._stream = self._stream, None

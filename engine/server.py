@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -37,6 +38,7 @@ SESSION_TICK_S = 1.0  # how often the live audio is taken from the recorder
 PREVIEW_INTERVAL_S = 2.0  # live preview refresh, the model is busy for part of this on a slow GPU
 PREVIEW_WINDOW_S = 10.0  # a preview only transcribes the newest seconds, so it stays cheap
 PREVIEW_MIN_S = 1.0  # shorter speech is too little to show
+DICTATION_PREVIEW_MAX_S = 30.0  # a held key rarely lasts longer, the preview shows the newest part of it
 LEVEL_INTERVAL_S = 0.1  # mean of the scaled block levels per window
 ALLOWED_ORIGINS = {None, "null", "file://"}
 
@@ -74,6 +76,7 @@ class Engine:
             on_hands_free=lambda: None,
         )
         self.session_id: int | None = None
+        self._dictation_preview: asyncio.Task | None = None
         self._session_running = False
         self._session_task: asyncio.Task | None = None
         self._session_wav: audio.WavWriter | None = None
@@ -182,12 +185,36 @@ class Engine:
         self._started_at = time.monotonic()
         self.hands_free = False
         await self._set_state("recording")
+        if self.settings.get("session_live_preview"):
+            self._dictation_preview = asyncio.create_task(self._dictation_preview_loop())
+
+    async def _dictation_preview_loop(self) -> None:
+        """Shows the text while the key is still held. The pasted text is still transcribed from the full audio at the end."""
+        while True:
+            await asyncio.sleep(PREVIEW_INTERVAL_S)
+            samples = self.recorder.peek(int(DICTATION_PREVIEW_MAX_S * audio.SAMPLE_RATE))
+            text = ""
+            if samples.size >= int(PREVIEW_MIN_S * audio.SAMPLE_RATE) and not audio.is_silent(samples):
+                text = await asyncio.to_thread(self._transcribe_preview, samples)
+            await self.broadcast({"type": "dictation_preview", "text": text})
+
+    def _transcribe_preview(self, samples: np.ndarray) -> str:
+        return self.transcriber.transcribe(samples, self.settings["language"], 1, []).text.strip()
+
+    async def _stop_dictation_preview(self) -> None:
+        task, self._dictation_preview = self._dictation_preview, None
+        if task:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await self.broadcast({"type": "dictation_preview", "text": ""})
 
     async def _enter_hands_free(self) -> None:
         self.hands_free = True
         await self._set_state(self.state)
 
     async def cancel_recording(self) -> None:
+        await self._stop_dictation_preview()
         if self.recorder.active:
             self.recorder.stop()
         self.ducker.restore()
@@ -197,6 +224,7 @@ class Engine:
     async def stop_recording(self) -> None:
         if not self.recorder.active:
             return
+        await self._stop_dictation_preview()
         samples = self.recorder.stop()
         self.ducker.restore()
         self.hotkey.set_recording(False)

@@ -5,6 +5,7 @@ import logging
 import os
 import site
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +53,7 @@ class Transcriber:
     def __init__(self, model_name: str, device: str = "auto") -> None:
         self.model_name = model_name
         self.device = "cpu"
+        self._lock = threading.Lock()
         self._model = self._load(model_name, device)
 
     def _load(self, model_name: str, device: str) -> WhisperModel:
@@ -76,6 +78,10 @@ class Transcriber:
         list(segments)
 
     def transcribe(self, audio: np.ndarray, language: str | None, beam_size: int, vocabulary: list[str]) -> SttResult:
+        with self._lock:  # live previews and the final text may run at the same time, the model is not thread-safe
+            return self._transcribe(audio, language, beam_size, vocabulary)
+
+    def _transcribe(self, audio: np.ndarray, language: str | None, beam_size: int, vocabulary: list[str]) -> SttResult:
         started = time.perf_counter()
         prompt = ", ".join(vocabulary[:MAX_PROMPT_WORDS]) or None
         segments, info = self._model.transcribe(

@@ -186,6 +186,9 @@ body[data-axis='v'] .copy-panel { bottom: auto; top: 50%; --panel-shift: transla
   font-size: 14px; line-height: 20px; white-space: pre-wrap; word-break: break-word;
 }
 .copy-actions { display: flex; justify-content: flex-end; }
+/* live dictation: the text grows above the pill while the key is held, it is not interactive */
+.live-panel { pointer-events: none; }
+.live-panel .copy-text { padding-right: 0; color: var(--vast-700); font-style: italic; }
 .copy-btn {
   padding: 6px 16px; border: none; border-radius: 999px; cursor: pointer;
   background: var(--sand-50); color: var(--ink); font: inherit; font-size: 13px; font-weight: 500;

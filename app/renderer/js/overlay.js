@@ -116,6 +116,21 @@ function hideCopyPanel() {
 }
 
 on('copy_panel', (msg) => showCopyPanel(msg.text));
+
+// ---- live dictation: the text so far, shown while the key is held ----
+const livePanel = document.getElementById('live-panel');
+const liveText = document.getElementById('live-text');
+on('dictation_preview', (msg) => {
+  if (!msg.text) {
+    livePanel.classList.remove('open');
+    setTimeout(() => { if (!livePanel.classList.contains('open')) livePanel.hidden = true; }, COPY_CLOSE_MS);
+    return;
+  }
+  liveText.textContent = msg.text;
+  liveText.scrollTop = liveText.scrollHeight; // the newest words stay in view
+  livePanel.hidden = false;
+  requestAnimationFrame(() => requestAnimationFrame(() => livePanel.classList.add('open')));
+});
 copyPanel.addEventListener('mouseenter', () => window.murmel.setOverlayInteractive(true));
 copyPanel.addEventListener('mouseleave', () => window.murmel.setOverlayInteractive(false));
 document.getElementById('copy-close').addEventListener('click', hideCopyPanel);
