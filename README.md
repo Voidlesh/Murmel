@@ -4,7 +4,7 @@
 
 **Diktieren statt tippen – lokal, schnell und kostenlos.**
 
-Eine Diktier-App für Windows, inspiriert von [Wispr Flow](https://wisprflow.ai/).
+Ein Klon von [Wispr Flow](https://wisprflow.ai/) für Windows, kostenlos und lokal.
 Taste halten, sprechen, loslassen – der Text landet dort, wo dein Cursor gerade steht.
 
 [![Plattform: Windows](https://img.shields.io/badge/Plattform-Windows%2010%20%2F%2011-0078D6)](#voraussetzungen)
@@ -73,10 +73,15 @@ Murmel bietet einen ähnlichen Workflow **ohne Abo und ohne Cloud**:
     <td><img src="docs/screenshots/insights-nutzung.png" alt="Insights – Deine Nutzung" width="100%"></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/woerterbuch.png" alt="Wörterbuch" width="100%"></td>
-    <td><img src="docs/screenshots/island-zustaende.png" alt="Island-Overlay Zustände" width="100%"></td>
+    <td colspan="2"><img src="docs/screenshots/woerterbuch.png" alt="Wörterbuch" width="100%"></td>
   </tr>
 </table>
+
+**Island-Overlay** – der Status-Pill am unteren Bildschirmrand in allen Zuständen:
+
+<p align="center">
+  <img src="docs/screenshots/island-zustaende.png" alt="Island-Overlay in allen Zuständen" width="420">
+</p>
 
 ---
 
@@ -259,4 +264,4 @@ Murmel baut auf großartigen Open-Source-Projekten auf:
 - [Fontsource](https://fontsource.org/) (Figtree, EB Garamond) und [Lucide](https://lucide.dev/) (Icons)
 - Hintergrundfotos von [Unsplash](https://unsplash.com/license)
 
-Die Idee des diktierbasierten Workflows stammt von [Wispr Flow](https://wisprflow.ai/).
+Vorbild für Funktionsumfang und Bedienung ist [Wispr Flow](https://wisprflow.ai/), das für Murmel durch Reverse Engineering nachgebaut wurde.
