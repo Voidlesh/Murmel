@@ -50,7 +50,7 @@ def engine(tmp_path, monkeypatch):
     eng = server.Engine()
     account = eng.accounts.register("Ann", "ann@example.de", "geheim123")
     eng._activate(account)
-    eng.settings = {**eng.settings, "session_keep_audio": False}
+    eng.settings = {**eng.settings, "session_keep_audio": False, "session_system_audio": False}  # no real loopback in tests
     eng.recorder = FakeRecorder()
     eng.transcriber = FakeTranscriber()
     eng.state = "idle"

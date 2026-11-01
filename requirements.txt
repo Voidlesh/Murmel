@@ -11,6 +11,7 @@ nvidia-cuda-nvrtc-cu12==12.9.86
 
 # Audio capture and Windows integration
 sounddevice==0.5.6
+pyaudiowpatch==0.2.12.9  # WASAPI loopback (system audio), sounddevice cannot do it
 keyboard==0.13.5
 pycaw==20260927
 comtypes==1.4.17

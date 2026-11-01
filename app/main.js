@@ -221,7 +221,7 @@ function registerIpc() {
     // unpackaged electron.exe needs the app folder, otherwise it would open the default Electron app
     const args = app.isPackaged ? ['--hidden'] : [app.getAppPath(), '--hidden'];
     app.setLoginItemSettings({ openAtLogin: Boolean(enabled), args });
-    return app.getLoginItemSettings().openAtLogin;
+    return app.getLoginItemSettings({ args }).openAtLogin; // same args as the write, or Windows reports it as off
   });
   ipcMain.handle('app:open-data-dir', () => shell.openPath(path.join(app.getPath('appData'), 'Murmel')));
 }

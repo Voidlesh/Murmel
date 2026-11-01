@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 import numpy as np
+import pyaudiowpatch as pyaudio
 import sounddevice as sd
 
 log = logging.getLogger(__name__)
@@ -71,13 +72,49 @@ def list_microphones() -> list[dict]:
     return mics
 
 
-def loopback_device() -> int | None:
-    """Default playback device, which WASAPI loopback records (so Discord, Teams and browsers are captured)."""
-    wasapi = next((i for i, api in enumerate(sd.query_hostapis()) if api["name"] == "Windows WASAPI"), None)
-    if wasapi is None:
-        return None
-    output = sd.query_hostapis(wasapi)["default_output_device"]
-    return output if output >= 0 else None
+def _resample(samples: np.ndarray, rate: int) -> np.ndarray:
+    """Linear resampling to SAMPLE_RATE. Good enough for speech; sounddevice cannot do WASAPI loopback."""
+    if rate == SAMPLE_RATE:
+        return samples
+    out_len = int(samples.size * SAMPLE_RATE / rate)
+    positions = np.arange(out_len) * (rate / SAMPLE_RATE)
+    return np.interp(positions, np.arange(samples.size), samples).astype(np.float32)
+
+
+class LoopbackStream:
+    """What the default playback device plays (Discord, Teams, browsers), via PyAudioWPatch's WASAPI loopback."""
+
+    def __init__(self, callback: Callable[..., None]) -> None:
+        self._callback = callback
+        self._pa = pyaudio.PyAudio()
+        try:
+            device = self._pa.get_default_wasapi_loopback()
+        except OSError as exc:
+            self._pa.terminate()
+            raise RuntimeError("Keine Wiedergabe gefunden, Systemaudio ist nicht verfügbar") from exc
+        self._rate = int(device["defaultSampleRate"])
+        self._channels = int(device["maxInputChannels"])
+        self._stream = self._pa.open(
+            format=pyaudio.paFloat32, channels=self._channels, rate=self._rate, input=True,
+            input_device_index=device["index"], frames_per_buffer=BLOCK * self._rate // SAMPLE_RATE,
+            stream_callback=self._on_audio, start=False,
+        )
+
+    def _on_audio(self, in_data: bytes, _frame_count: int, _time_info, status: int):
+        frames = np.frombuffer(in_data, dtype=np.float32).reshape(-1, self._channels)
+        mono = _resample(frames.mean(axis=1, dtype=np.float32), self._rate)
+        self._callback(mono.reshape(-1, 1), mono.size, None, None)
+        return None, pyaudio.paContinue
+
+    def start(self) -> None:
+        self._stream.start_stream()
+
+    def stop(self) -> None:
+        self._stream.stop_stream()
+
+    def close(self) -> None:
+        self._stream.close()
+        self._pa.terminate()
 
 
 class Recorder:
@@ -101,20 +138,12 @@ class Recorder:
             self._stream = self._open_stream(device, loopback)
             self._stream.start()
 
-    def _open_stream(self, device: int | None, loopback: bool) -> sd.InputStream:
-        if not loopback:
-            return sd.InputStream(
-                samplerate=SAMPLE_RATE, channels=1, dtype="float32", blocksize=BLOCK,
-                device=device, callback=self._callback,
-            )
-        output = loopback_device()
-        if output is None:
-            raise RuntimeError("Keine Wiedergabe gefunden, Systemaudio ist nicht verfügbar")
-        channels = int(sd.query_devices(output)["max_output_channels"])
+    def _open_stream(self, device: int | None, loopback: bool) -> sd.InputStream | LoopbackStream:
+        if loopback:
+            return LoopbackStream(self._callback)
         return sd.InputStream(
-            samplerate=SAMPLE_RATE, channels=channels, dtype="float32", blocksize=BLOCK,
-            device=output, extra_settings=sd.WasapiSettings(loopback=True, auto_convert=True),
-            callback=self._callback,
+            samplerate=SAMPLE_RATE, channels=1, dtype="float32", blocksize=BLOCK,
+            device=device, callback=self._callback,
         )
 
     def _callback(self, data: np.ndarray, _frames: int, _time, status) -> None:
