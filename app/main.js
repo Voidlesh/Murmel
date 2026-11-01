@@ -39,14 +39,23 @@ function portOpen(port) {
   });
 }
 
+// the installed app ships the engine as a PyInstaller bundle; in dev mode it runs from the project venv
+function engineCommand() {
+  if (app.isPackaged) {
+    const exe = path.join(process.resourcesPath, 'engine', 'murmel-engine.exe');
+    return { command: exe, args: [], cwd: path.dirname(exe) };
+  }
+  return { command: path.join(ROOT, '.venv', 'Scripts', 'pythonw.exe'), args: ['-m', 'engine'], cwd: ROOT };
+}
+
 async function startEngine() {
   if (await portOpen(ENGINE_PORT)) return; // engine already running (dev mode)
-  const python = path.join(ROOT, '.venv', 'Scripts', 'pythonw.exe');
-  if (!fs.existsSync(python)) {
-    console.error('Python-Umgebung fehlt:', python);
+  const { command, args, cwd } = engineCommand();
+  if (!fs.existsSync(command)) {
+    console.error('Engine fehlt:', command);
     return;
   }
-  engineProc = spawn(python, ['-m', 'engine'], { cwd: ROOT, windowsHide: true, stdio: 'ignore' });
+  engineProc = spawn(command, args, { cwd, windowsHide: true, stdio: 'ignore' });
   engineProc.on('exit', (code) => {
     engineProc = null;
     if (!quitting) console.error('Engine beendet mit Code', code);

@@ -16,6 +16,23 @@ Taste halten, sprechen, loslassen – der Text landet dort, wo dein Cursor gerad
 
 ---
 
+## Download und Installation
+
+Die fertige App gibt es unter **[Releases](https://github.com/Voidlesh/Murmel/releases/latest)**. Du brauchst weder Python noch Node.js.
+
+1. Auf der [Releases-Seite](https://github.com/Voidlesh/Murmel/releases/latest) die Datei **`Murmel-Setup-x.y.z.exe`** herunterladen (ca. 1,3 GB).
+2. Die Datei starten. Windows zeigt eventuell „Der Computer wurde durch Windows geschützt". Dann auf **Weitere Informationen → Trotzdem ausführen** klicken. Die Warnung kommt, weil der Installer (noch) nicht signiert ist.
+3. Den Installer durchklicken. Die Installation braucht keine Administratorrechte und landet unter `%LOCALAPPDATA%\Programs\Murmel`.
+4. Murmel über das Startmenü oder die Desktop-Verknüpfung starten. Es erscheint ein Tray-Icon, über das du die App jederzeit wieder öffnest.
+
+**Beim ersten Start:** Murmel lädt das Spracherkennungsmodell (ca. 1,6 GB) herunter. Dafür brauchst du einmalig eine Internetverbindung. Danach läuft alles lokal.
+
+**Autostart:** In den Einstellungen der App kannst du Murmel mit Windows starten lassen. Dann läuft sie im Hintergrund.
+
+**Deinstallation:** Windows-Einstellungen → Apps → Murmel → Deinstallieren. Deine Daten (Accounts, Verlauf, Wörterbuch) bleiben unter `%APPDATA%\Murmel` erhalten.
+
+> Für beste Geschwindigkeit braucht Murmel eine NVIDIA-Grafikkarte mit aktuellem Treiber. Ohne GPU läuft die Spracherkennung auf dem Prozessor, dann dauert sie etwas länger.
+
 ## Inhalt
 
 - [Warum Murmel?](#warum-murmel)

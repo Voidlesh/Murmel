@@ -25,3 +25,6 @@ accounts/
 Thumbs.db
 Desktop.ini
 *.swp
+
+# Packaging output (PyInstaller engine bundle, Electron installer)
+build/

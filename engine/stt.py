@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import site
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,9 +20,15 @@ CUDA_COMPUTE_TYPE = "int8_float32"
 MAX_PROMPT_WORDS = 60
 
 
+def _cuda_roots() -> list[str]:
+    """Where the nvidia-* DLLs live: site-packages in dev, the bundle folder in the PyInstaller build."""
+    bundle_dir = getattr(sys, "_MEIPASS", None)
+    return ([bundle_dir] if bundle_dir else []) + site.getsitepackages()
+
+
 def _register_cuda_dlls() -> None:
     """pip's nvidia-* wheels ship DLLs that Windows will not find on its own."""
-    for root in site.getsitepackages():
+    for root in _cuda_roots():
         for sub in ("cublas", "cudnn", "cuda_nvrtc"):
             bin_dir = Path(root) / "nvidia" / sub / "bin"
             if bin_dir.is_dir():

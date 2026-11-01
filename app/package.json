@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "murmel",
   "version": "1.0.0",
   "description": "Lokale Diktier-App",
@@ -6,12 +6,47 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "icons": "node scripts/make-icon.js && node scripts/make-icons-css.js"
+    "icons": "node scripts/make-icon.js && node scripts/make-icons-css.js",
+    "dist": "electron-builder --win"
+  },
+  "build": {
+    "appId": "dev.murmel.app",
+    "productName": "Murmel",
+    "copyright": "Copyright (c) Murmel contributors",
+    "directories": { "output": "../build/installer" },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "assets/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "../build/engine-dist/murmel-engine", "to": "engine" }
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "assets/icon.ico",
+      "artifactName": "Murmel-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Murmel",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "uninstallDisplayName": "Murmel"
+    }
   },
   "license": "MIT",
   "type": "commonjs",
   "devDependencies": {
-    "electron": "^45.2.1"
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0"
   },
   "dependencies": {
     "@fontsource-variable/eb-garamond": "^5.3.0",
