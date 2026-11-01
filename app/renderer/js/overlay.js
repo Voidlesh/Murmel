@@ -90,8 +90,9 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
-function showTooltip(html, sticky = false) {
+function showTooltip(html, sticky = false, rich = false) {
   tooltip.innerHTML = html;
+  tooltip.classList.toggle('card', rich);
   tooltip.classList.add('show');
   clearTimeout(tooltipTimer);
   if (!sticky) tooltipTimer = setTimeout(() => tooltip.classList.remove('show'), TOOLTIP_MS);
@@ -171,12 +172,14 @@ on('connection', (up) => { if (!up) { engineState = 'loading'; render(); } });
 hotArea.addEventListener('mouseenter', () => {
   window.murmel.setOverlayInteractive(true);
   hovered = true;
+  hotArea.classList.add('hovered');
   render();
   if (engineState === 'idle') showTooltip(`Halte ${keyHtml()}`, true);
 });
 hotArea.addEventListener('mouseleave', () => {
   window.murmel.setOverlayInteractive(false);
   hovered = false;
+  hotArea.classList.remove('hovered');
   render();
   if (engineState === 'idle') hideTooltip();
 });
@@ -191,6 +194,43 @@ bubble.addEventListener('click', (e) => {
 });
 document.getElementById('btn-cancel').addEventListener('click', () => call('cancel'));
 document.getElementById('btn-stop').addEventListener('click', () => call('toggle'));
+
+// ---- notes: start/stop a long session from the island ---------------------------------------
+const notesBtn = document.getElementById('btn-notes');
+let sessionLive = false;
+
+function notesTipHtml() {
+  return sessionLive
+    ? '<b>Notizen-Aufnahme beenden</b><span>Das Transkript wird gespeichert und zusammengefasst</span>'
+    : '<b>Notizen-Aufnahme starten</b><span>Transkript, Notizen und Aufgaben für jede Aufnahme</span>';
+}
+
+function renderNotes() {
+  notesBtn.classList.toggle('live', sessionLive);
+  notesBtn.setAttribute('aria-label', sessionLive ? 'Notizen-Aufnahme beenden' : 'Notizen-Aufnahme starten');
+}
+
+on('session_status', (msg) => {
+  sessionLive = msg.session?.status === 'recording';
+  renderNotes();
+});
+notesBtn.addEventListener('mouseenter', () => {
+  window.murmel.setOverlayInteractive(true);
+  showTooltip(notesTipHtml(), true, true);
+});
+notesBtn.addEventListener('mouseleave', () => {
+  if (!hovered) window.murmel.setOverlayInteractive(false);
+  hideTooltip();
+});
+notesBtn.addEventListener('click', async () => {
+  try {
+    await call(sessionLive ? 'session_stop' : 'session_start', {});
+    hideTooltip();
+  } catch (err) {
+    showTooltip(err.message);
+  }
+});
+renderNotes();
 
 // ---- docking: drag the pill to the bottom, top, left or right edge ---------------------------------
 const dragLayer = document.getElementById('drag-layer');

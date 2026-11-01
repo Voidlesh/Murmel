@@ -29,8 +29,8 @@ body[data-dock='left'] .stage { flex-direction: row-reverse; align-items: center
 body[data-dock='right'] .stage { flex-direction: row; align-items: center; padding: 0 9px 0 0; --tip-shift: 0; }
 
 /* hover area keeps the resting pill easy to hit */
-.hot-area { display: flex; align-items: center; justify-content: center; padding: 6px 10px; background: rgba(0, 0, 0, 0.004); }
-body[data-axis='v'] .hot-area { padding: 10px 6px; }
+.hot-area { display: flex; align-items: center; justify-content: center; padding: 6px 16px; background: rgba(0, 0, 0, 0.004); }
+body[data-axis='v'] .hot-area { padding: 16px 6px; }
 
 /* ---- the bubble ------------------------------------------------------ */
 .bubble {
@@ -129,6 +129,14 @@ body[data-axis='v'] .hot-area { padding: 10px 6px; }
   pointer-events: none;
 }
 .tooltip.show { visibility: visible; opacity: 1; transform: none; transition: transform 180ms ease, opacity 120ms ease; }
+/* rich card: title plus a short description, as used for the notes button */
+.tooltip.card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  width: 300px; padding: 10px 14px 11px; border-radius: 14px; white-space: normal;
+  background: #111; border-color: #2c2c2a; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.tooltip.card b { font-size: 14px; font-weight: 600; line-height: 19px; }
+.tooltip.card span { font-size: 12.5px; line-height: 17px; color: #a3a39f; }
 .tooltip .key { color: #ffa946; font-weight: 500; }
 
 /* ---- vertical docks (left / right): the pill turns 90 degrees, bars become horizontal ------------ */
@@ -193,6 +201,31 @@ body[data-axis='v'] .copy-panel { bottom: auto; top: 50%; --panel-shift: transla
 }
 .copy-close:hover { background: var(--vast-900); color: var(--shade-white); }
 .copy-close svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; }
+
+/* ---- notes button: slides out beside the pill on hover; stays visible while a session records ---- */
+.hot-area { position: relative; }
+.notes-btn {
+  position: absolute; left: 100%; top: 50%; margin-left: -12px;
+  display: flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; padding: 0; border: 1px solid var(--vast-900); border-radius: 999px;
+  background: var(--shade-black); color: var(--shade-white); cursor: pointer;
+  opacity: 0; pointer-events: none; transform: translateY(-50%) scale(0.6);
+  transition: opacity 0.15s ease, transform 0.18s var(--morph), background-color 0.12s ease;
+}
+.hot-area.hovered .notes-btn { opacity: 1; pointer-events: auto; transform: translateY(-50%) scale(1); }
+.notes-btn:hover { background: var(--vast-900); }
+.notes-btn:active { transform: translateY(-50%) scale(0.92); }
+.notes-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.notes-btn .ic-stop { display: none; fill: currentColor; stroke: none; }
+.notes-btn.live { opacity: 1; pointer-events: auto; transform: translateY(-50%) scale(1); background: var(--sand-50); color: var(--ink); border-color: transparent; }
+.notes-btn.live:hover { background: #e6e6e3; }
+.notes-btn.live .ic-start { display: none; }
+.notes-btn.live .ic-stop { display: block; }
+/* vertical docks: the pill is standing, so the button sits below it */
+body[data-axis='v'] .notes-btn { left: 50%; top: 100%; margin: -12px 0 0; transform: translateX(-50%) scale(0.6); }
+body[data-axis='v'] .hot-area.hovered .notes-btn { transform: translateX(-50%) scale(1); }
+body[data-axis='v'] .notes-btn.live { transform: translateX(-50%) scale(1); }
+body[data-axis='v'] .notes-btn:active { transform: translateX(-50%) scale(0.92); }
 
 /* ---- drag & drop: the window covers the work area, four ghost slots show where the pill can snap ---- */
 .drag-layer { position: fixed; inset: 0; display: none; cursor: grabbing; }
