@@ -336,4 +336,15 @@ window.addEventListener('pointerup', () => {
 
 window.murmel.getOverlayDock().then(applyDock);
 window.murmel.onOverlayDock(applyDock);
+
+// ---- right-click menu on the island, and actions requested from the tray, taskbar or that menu ----
+hotArea.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  window.murmel.showIslandMenu();
+});
+const OVERLAY_ACTIONS = {
+  toggle: () => call('toggle').catch((err) => showTooltip(err.message)),
+  notes: () => notesBtn.click(),
+};
+window.murmel.onOverlayAction((name) => OVERLAY_ACTIONS[name]?.());
 render();

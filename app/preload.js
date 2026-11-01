@@ -19,4 +19,7 @@ contextBridge.exposeInMainWorld('murmel', {
   setAutostart: (on) => ipcRenderer.invoke('app:set-autostart', Boolean(on)),
   openDataDir: () => ipcRenderer.invoke('app:open-data-dir'),
   onMaximized: (cb) => ipcRenderer.on('window:maximized', (_e, v) => cb(v)),
+  onNavigate: (cb) => ipcRenderer.on('app:navigate', (_e, page) => cb(page)),
+  showIslandMenu: () => ipcRenderer.send('overlay:menu'),
+  onOverlayAction: (cb) => ipcRenderer.on('overlay:action', (_e, name) => cb(name)),
 });

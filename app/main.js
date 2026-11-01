@@ -13,6 +13,13 @@ const OVERLAY_SIZES = {
 const OVERLAY_EDGE_GAP = 2; // pill sits ~16px from the screen edge like the reference
 const DOCKS = ['bottom', 'top', 'left', 'right'];
 const ICON_PATH = path.join(__dirname, 'assets', 'icon.png');
+const MINUTE_MS = 60 * 1000;
+const DOCK_LABELS = { bottom: 'Unten', top: 'Oben', left: 'Links', right: 'Rechts' };
+const ISLAND_HIDE_OPTIONS = [
+  { label: 'Für 30 Minuten ausblenden', ms: 30 * MINUTE_MS },
+  { label: 'Für 2 Stunden ausblenden', ms: 120 * MINUTE_MS },
+  { label: 'Bis ich sie wieder einblende', ms: 0 },
+];
 
 let mainWindow = null;
 let overlayWindow = null;
@@ -27,7 +34,9 @@ app.setPath('userData', path.join(app.getPath('appData'), 'Murmel', 'ui'));
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', showMain);
+  app.on('second-instance', (_e, argv) => {
+    if (!runCommands(argv)) showMain();
+  });
   app.whenReady().then(start);
 }
 
@@ -145,12 +154,148 @@ function createOverlay() {
 function createTray() {
   tray = new Tray(nativeImage.createFromPath(ICON_PATH).resize({ width: 16, height: 16 }));
   tray.setToolTip('Murmel');
-  tray.setContextMenu(Menu.buildFromTemplate([
+  refreshTrayMenu();
+  tray.on('click', showMain);
+}
+
+// ---- island visibility: hide for a while or until it is shown again ----
+let islandTimer = null;
+
+const islandVisible = () => Boolean(overlayWindow?.isVisible());
+
+function setIslandVisible(visible, hideMs = 0) {
+  clearTimeout(islandTimer);
+  islandTimer = null;
+  if (visible) {
+    overlayWindow?.showInactive();
+  } else {
+    overlayWindow?.hide();
+    if (hideMs) islandTimer = setTimeout(() => setIslandVisible(true), hideMs);
+  }
+  refreshTrayMenu();
+}
+
+function setDock(target) {
+  if (!DOCKS.includes(target)) return;
+  dock = target;
+  saveDock();
+  if (!overlayWindow) return;
+  placeOverlay();
+  overlayWindow.webContents.send('overlay:dock', dock);
+  refreshTrayMenu();
+}
+
+// the island's actions run in the overlay renderer, so the menu only forwards the name
+const overlayAction = (name) => overlayWindow?.webContents.send('overlay:action', name);
+
+function openMain(page) {
+  showMain();
+  mainWindow?.webContents.send('app:navigate', page);
+}
+
+// menu entries shared by the island's right-click menu and the tray menu
+function islandMenuItems() {
+  const hide = islandVisible()
+    ? {
+      label: 'Island ausblenden',
+      submenu: ISLAND_HIDE_OPTIONS.map(({ label, ms }) => ({ label, click: () => setIslandVisible(false, ms) })),
+    }
+    : { label: 'Island einblenden', click: () => setIslandVisible(true) };
+  const position = {
+    label: 'Position',
+    submenu: DOCKS.map((target) => ({
+      label: DOCK_LABELS[target], type: 'radio', checked: dock === target, click: () => setDock(target),
+    })),
+  };
+  return [hide, position];
+}
+
+function islandContextMenu() {
+  return Menu.buildFromTemplate([
+    { label: 'Diktat starten / stoppen', click: () => overlayAction('toggle') },
+    { label: 'Notizen-Aufnahme starten / öffnen', click: () => overlayAction('notes') },
+    { type: 'separator' },
+    ...islandMenuItems(),
+    { type: 'separator' },
+    { label: 'Einstellungen öffnen', click: () => openMain('settings') },
     { label: 'Murmel öffnen', click: showMain },
+  ]);
+}
+
+function trayMenuTemplate() {
+  return [
+    { label: 'Murmel öffnen', click: showMain },
+    { label: 'Einstellungen', click: () => openMain('settings') },
+    { type: 'separator' },
+    ...islandMenuItems(),
+    { type: 'separator' },
+    {
+      label: 'Mit Windows starten',
+      type: 'checkbox',
+      checked: autostartEnabled(),
+      click: (item) => setAutostart(item.checked),
+    },
     { type: 'separator' },
     { label: 'Beenden', click: () => { quitting = true; app.quit(); } },
-  ]));
-  tray.on('click', showMain);
+  ];
+}
+
+function refreshTrayMenu() {
+  tray?.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate()));
+}
+
+// unpackaged electron.exe needs the app folder, otherwise it would open the default Electron app
+const launchArgs = (extra) => [...(app.isPackaged ? [] : [app.getAppPath()]), ...extra];
+
+function autostartEnabled() {
+  return app.getLoginItemSettings({ args: launchArgs(['--hidden']) }).openAtLogin;
+}
+
+function setAutostart(enabled) {
+  // same args as the write, or Windows reports it as off
+  app.setLoginItemSettings({ openAtLogin: Boolean(enabled), args: launchArgs(['--hidden']) });
+  refreshTrayMenu();
+  return autostartEnabled();
+}
+
+// taskbar jump list (right-click on the taskbar icon); labels are static, so each one is a command
+function setJumpList() {
+  const task = (title, args) => ({
+    program: process.execPath,
+    arguments: launchArgs(args).map((arg) => `"${arg}"`).join(' '),
+    iconPath: process.execPath,
+    iconIndex: 0,
+    title,
+  });
+  app.setUserTasks([
+    task('Diktat starten / stoppen', ['--toggle']),
+    task('Notizen-Aufnahme starten', ['--notes']),
+    task('Island einblenden', ['--show-island']),
+    task('Island ausblenden', ['--hide-island']),
+    task('Einstellungen', ['--page=settings']),
+  ]);
+}
+
+const COMMANDS = {
+  '--toggle': () => overlayAction('toggle'),
+  '--notes': () => overlayAction('notes'),
+  '--show-island': () => setIslandVisible(true),
+  '--hide-island': () => setIslandVisible(false),
+};
+
+// runs command-line flags from a launch, the jump list or a second start; true if any flag was handled
+function runCommands(argv) {
+  let ran = false;
+  for (const arg of argv) {
+    if (COMMANDS[arg]) {
+      COMMANDS[arg]();
+      ran = true;
+    } else if (arg.startsWith('--page=')) {
+      openMain(arg.slice('--page='.length));
+      ran = true;
+    }
+  }
+  return ran;
 }
 
 let sessionWindow = null;
@@ -214,15 +359,9 @@ function registerIpc() {
     overlayWindow.webContents.send('overlay:dock', dock);
     return dock;
   });
-  ipcMain.handle('app:get-autostart', () => app.getLoginItemSettings({
-    args: app.isPackaged ? ['--hidden'] : [app.getAppPath(), '--hidden'],
-  }).openAtLogin);
-  ipcMain.handle('app:set-autostart', (_e, enabled) => {
-    // unpackaged electron.exe needs the app folder, otherwise it would open the default Electron app
-    const args = app.isPackaged ? ['--hidden'] : [app.getAppPath(), '--hidden'];
-    app.setLoginItemSettings({ openAtLogin: Boolean(enabled), args });
-    return app.getLoginItemSettings({ args }).openAtLogin; // same args as the write, or Windows reports it as off
-  });
+  ipcMain.on('overlay:menu', () => islandContextMenu().popup({ window: overlayWindow }));
+  ipcMain.handle('app:get-autostart', autostartEnabled);
+  ipcMain.handle('app:set-autostart', (_e, enabled) => setAutostart(enabled));
   ipcMain.handle('app:open-data-dir', () => shell.openPath(path.join(app.getPath('appData'), 'Murmel')));
 }
 
@@ -233,6 +372,8 @@ async function start() {
   createMain();
   createOverlay();
   createTray();
+  setJumpList();
+  overlayWindow.webContents.once('did-finish-load', () => runCommands(process.argv));
 }
 
 app.on('before-quit', () => {

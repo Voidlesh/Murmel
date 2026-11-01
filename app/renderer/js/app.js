@@ -205,6 +205,7 @@ function wireChrome() {
   document.getElementById('btn-account').onclick = (e) => { e.stopPropagation(); toggleAccountMenu(); };
   document.addEventListener('click', (e) => { if (!e.target.closest('#account-menu')) closeAccountMenu(); });
   document.querySelectorAll('[data-page]').forEach((b) => b.addEventListener('click', () => navigate(b.dataset.page)));
+  window.murmel.onNavigate((page) => navigate(page));
   const themeParam = launchParams.get('theme');
   if (['dark', 'light'].includes(themeParam)) applyTheme(themeParam, false);
   else applyTheme(readPref(THEME_KEY, 'dark'));
