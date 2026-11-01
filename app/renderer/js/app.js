@@ -6,9 +6,10 @@ import * as insights from './pages/insights.js';
 import * as dictionary from './pages/dictionary.js';
 import * as snippets from './pages/snippets.js';
 import * as style from './pages/style.js';
+import * as notes from './pages/notes.js';
 import * as settingsPage from './pages/settings.js';
 
-const PAGES = { home, insights, dictionary, snippets, style, settings: settingsPage };
+const PAGES = { home, notes, insights, dictionary, snippets, style, settings: settingsPage };
 const TOAST_MS = 3200;
 const THEME_KEY = 'murmel.theme.v2';
 const SIDEBAR_KEY = 'murmel.sidebar';
@@ -221,6 +222,8 @@ function boot() {
     Object.values(PAGES).forEach((p) => p.onTranscript?.(msg.item, ctx));
     renderOnboarding();
   });
+  on('session_status', (msg) => Object.values(PAGES).forEach((p) => p.onSessionStatus?.(msg.session, ctx)));
+  on('session_segment', (msg) => Object.values(PAGES).forEach((p) => p.onSessionSegment?.(msg, ctx)));
   on('notice', (msg) => toast(msg.text));
   on('account', (msg) => {
     if (!msg.account || msg.account.id !== state.account?.id) { checkAuth(); return; }

@@ -29,6 +29,8 @@ DEFAULTS: dict[str, Any] = {
     "restore_clipboard": True,
     "copy_fallback": True,
     "keep_audio": True,
+    "session_hotkey": "",
+    "session_keep_audio": True,
     "remove_fillers": True,
     "voice_commands": True,
     "typing_wpm": 40,

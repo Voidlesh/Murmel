@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 
 SAMPLE_RATE = 16000
 BLOCK = 800  # 50 ms
+SILENCE_RMS = 0.004  # RMS below this counts as silence
 SILENCE_DB = -100.0
 FLOOR_MIN_DB = -60.0
 RANGE_DB = 20.0
@@ -96,8 +97,17 @@ class Recorder:
         if status:
             log.debug("audio status: %s", status)
         mono = data[:, 0].copy()
-        self._chunks.append(mono)
+        with self._lock:
+            self._chunks.append(mono)
         self._on_level(band_levels_db(mono))
+
+    def drain(self) -> np.ndarray:
+        """Take the samples recorded since the last drain, so long sessions do not grow in memory."""
+        with self._lock:
+            chunks, self._chunks = self._chunks, []
+        if not chunks:
+            return np.zeros(0, dtype=np.float32)
+        return np.concatenate(chunks)
 
     def stop(self) -> np.ndarray:
         with self._lock:
@@ -105,13 +115,29 @@ class Recorder:
         if stream:
             stream.stop()
             stream.close()
-        if not self._chunks:
-            return np.zeros(0, dtype=np.float32)
-        return np.concatenate(self._chunks)
+        return self.drain()
 
 
-def is_silent(audio: np.ndarray, threshold: float = 0.004) -> bool:
+def is_silent(audio: np.ndarray, threshold: float = SILENCE_RMS) -> bool:
     return audio.size == 0 or float(np.sqrt(np.mean(audio**2))) < threshold
+
+
+class WavWriter:
+    """Writes 16 kHz mono PCM while a session is recorded, so long audio never sits fully in memory."""
+
+    def __init__(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._wav = wave.open(str(path), "wb")
+        self._wav.setnchannels(1)
+        self._wav.setsampwidth(2)
+        self._wav.setframerate(SAMPLE_RATE)
+
+    def write(self, samples: np.ndarray) -> None:
+        pcm = (np.clip(samples, -1, 1) * 32767).astype(np.int16)
+        self._wav.writeframes(pcm.tobytes())
+
+    def close(self) -> None:
+        self._wav.close()
 
 
 def save_wav(audio: np.ndarray, path: Path) -> None:

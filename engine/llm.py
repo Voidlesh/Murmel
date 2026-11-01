@@ -30,6 +30,26 @@ Rules:
 {extra}"""
 
 
+SECTION_SUMMARY = "## Zusammenfassung"
+SECTION_TASKS = "## Aufgaben"
+SUMMARY_BLOCK_WORDS = 1500  # about 2k tokens of transcript per request
+SUMMARY_MAX_TOKENS = 1024
+SUMMARY_TIMEOUT_S = 300  # local models are slow on long input
+_SUMMARY_FORMAT = f"""Answer in the language of the transcript with exactly these two sections:
+{SECTION_SUMMARY}
+(a short paragraph with the key points)
+{SECTION_TASKS}
+(one bullet per concrete task or follow-up; leave empty if there are none)"""
+SUMMARY_BLOCK_PROMPT = (
+    "You summarize a transcript of a meeting or lecture. Only use what is in the transcript. "
+    + _SUMMARY_FORMAT
+)
+SUMMARY_MERGE_PROMPT = (
+    "You receive partial summaries of consecutive parts of one meeting. Merge them into one summary "
+    "without repeating points. " + _SUMMARY_FORMAT
+)
+
+
 def _post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST"
@@ -53,8 +73,6 @@ def polish(
 ) -> str:
     """Return polished text, or raise on any failure so the caller can fall back."""
     style = style or StyleContext()
-    base = cfg["base_url"].rstrip("/")
-    model = cfg.get("model") or (list_models(base) or [""])[0]
     extra_lines = []
     if vocabulary:
         extra_lines.append("- Spell these names/terms exactly like this: " + ", ".join(vocabulary[:40]))
@@ -64,21 +82,66 @@ def polish(
     system = SYSTEM_PROMPT.format(tone=TONE_RULES.get(tone, TONE_RULES["formal"]), extra="\n".join(extra_lines))
     # few-shot: earlier dictations the user corrected, shown as dictation -> what they wanted
     examples = [m for ex in style.examples for m in (_dictation(ex.raw), {"role": "assistant", "content": ex.final})]
-    data = _post(
-        base + "/chat/completions",
-        {
-            "model": model,
-            "temperature": 0.1,
-            "max_tokens": max(64, len(text) * 2),
-            "messages": [{"role": "system", "content": system}, *examples, _dictation(text)],
-        },
-        timeout=float(cfg.get("timeout_s", 10)),
+    out = _chat(
+        cfg,
+        [{"role": "system", "content": system}, *examples, _dictation(text)],
+        max_tokens=max(64, len(text) * 2),
     )
-    out = data["choices"][0]["message"]["content"].strip()
     out = out.removeprefix("<dictation>").removesuffix("</dictation>").strip().strip('"').strip()
     if not out or len(out) > len(text) * 2 + 40:
         raise ValueError("LLM-Antwort unplausibel, verwerfe")
     return out
+
+
+def _chat(
+    cfg: dict[str, Any], messages: list[dict[str, str]], max_tokens: int, temperature: float = 0.1,
+    timeout: float | None = None,
+) -> str:
+    """One chat completion against the configured local server; returns the answer text."""
+    base = cfg["base_url"].rstrip("/")
+    model = cfg.get("model") or (list_models(base) or [""])[0]
+    data = _post(
+        base + "/chat/completions",
+        {"model": model, "temperature": temperature, "max_tokens": max_tokens, "messages": messages},
+        timeout=timeout or float(cfg.get("timeout_s", 10)),
+    )
+    return data["choices"][0]["message"]["content"].strip()
+
+
+def split_words(text: str, size: int) -> list[str]:
+    words = text.split()
+    return [" ".join(words[i:i + size]) for i in range(0, len(words), size)]
+
+
+def _parse_summary(answer: str) -> tuple[str, list[str]]:
+    head, _, tasks = answer.partition(SECTION_TASKS)
+    summary = head.replace(SECTION_SUMMARY, "").strip()
+    items = [line.strip()[2:].strip() for line in tasks.splitlines() if line.strip().startswith(("- ", "* "))]
+    return summary, items
+
+
+def summarize_session(text: str, cfg: dict[str, Any]) -> tuple[str, list[str]]:
+    """Summary and task list for a whole session. Long transcripts are summarized block by block, then merged."""
+    blocks = split_words(text, SUMMARY_BLOCK_WORDS)
+    if not blocks:
+        return "", []
+    parts = [
+        _chat(cfg, [_system(SUMMARY_BLOCK_PROMPT), _user(block)], SUMMARY_MAX_TOKENS, timeout=SUMMARY_TIMEOUT_S)
+        for block in blocks
+    ]
+    answer = parts[0] if len(parts) == 1 else _chat(
+        cfg, [_system(SUMMARY_MERGE_PROMPT), _user("\n\n---\n\n".join(parts))], SUMMARY_MAX_TOKENS,
+        timeout=SUMMARY_TIMEOUT_S,
+    )
+    return _parse_summary(answer)
+
+
+def _system(content: str) -> dict[str, str]:
+    return {"role": "system", "content": content}
+
+
+def _user(content: str) -> dict[str, str]:
+    return {"role": "user", "content": content}
 
 
 def check(cfg: dict[str, Any]) -> dict[str, Any]:

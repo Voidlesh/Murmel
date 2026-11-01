@@ -47,6 +47,10 @@ export function init(el, context) {
         <div class="hotkey-picker"><span class="kbd" id="set-hotkey-label"></span>
           <select class="select narrow" id="set-hotkey-preset" aria-label="Voreinstellung"></select>
           <button class="btn" id="set-hotkey-record"><span class="ic i-keyboard"></span>Aufnehmen</button></div></div>
+      <div class="setting-row"><div><b>Sitzungs-Taste</b><p class="hint-text">Startet und stoppt eine lange Aufnahme für Notizen. Ohne Taste ist sie aus.</p></div>
+        <div class="hotkey-picker"><span class="kbd" id="set-session-label"></span>
+          <button class="btn" id="set-session-record"><span class="ic i-keyboard"></span>Aufnehmen</button>
+          <button class="btn btn-ghost" id="set-session-clear" title="Sitzungs-Taste entfernen" aria-label="Sitzungs-Taste entfernen"><span class="ic i-x"></span></button></div></div>
       <div class="setting-row"><div><b>Tippen für Freihand-Modus</b><p class="hint-text">Kurzes Antippen startet eine Aufnahme ohne Halten.</p></div>
         <label class="switch"><input type="checkbox" id="set-tap"/><i></i></label></div>
       <div class="setting-row"><div><b>Sounds</b><p class="hint-text">Kurzer Ton bei Start und Ende.</p></div>
@@ -99,7 +103,11 @@ export function init(el, context) {
     const b = e.target.closest('[data-beam]');
     if (b) { await save({ beam_size: Number(b.dataset.beam) }); render(); }
   });
-  root.querySelector('#set-hotkey-record').addEventListener('click', recordHotkey);
+  root.querySelector('#set-hotkey-record').addEventListener('click', () => recordHotkey('hotkey', 'Neue Diktier-Taste'));
+  root.querySelector('#set-session-record').addEventListener('click', () => recordHotkey('session_hotkey', 'Neue Sitzungs-Taste'));
+  root.querySelector('#set-session-clear').addEventListener('click', async () => {
+    if (await save({ session_hotkey: '' })) { ctx.toast('Sitzungs-Taste entfernt'); render(); }
+  });
   root.querySelector('#set-autostart').addEventListener('change', async (e) => {
     e.target.checked = await window.murmel.setAutostart(e.target.checked);
   });
@@ -213,6 +221,7 @@ function render() {
   const s = ctx.settings;
   root.querySelector('#set-name').value = s.user_name;
   root.querySelector('#set-hotkey-label').textContent = hotkeyLabel(s.hotkey);
+  root.querySelector('#set-session-label').textContent = s.session_hotkey ? hotkeyLabel(s.session_hotkey) : 'aus';
   const presets = HOTKEY_PRESETS.includes(s.hotkey) ? HOTKEY_PRESETS : [...HOTKEY_PRESETS, s.hotkey];
   root.querySelector('#set-hotkey-preset').innerHTML = presets
     .map((h) => `<option value="${escapeHtml(h)}" ${h === s.hotkey ? 'selected' : ''}>${escapeHtml(hotkeyLabel(h))}</option>`).join('');
@@ -229,10 +238,10 @@ function render() {
   onEngineState(ctx.engine);
 }
 
-/** Captures a key combo in the page. The current hotkey itself is swallowed by the engine. */
-function recordHotkey() {
+/** Captures a key combo in the page and saves it to the given setting. The current hotkey itself is swallowed by the engine. */
+function recordHotkey(settingKey, title) {
   const { el, close } = ctx.modal(`
-    <h3>Neue Diktier-Taste</h3>
+    <h3>${escapeHtml(title)}</h3>
     <p class="hint-text">Drücke die gewünschte Taste oder Kombination (z. B. Strg + Win). Loslassen übernimmt sie.</p>
     <div class="hotkey-capture"><span class="kbd" id="cap">…</span></div>
     <div class="modal-actions"><button class="btn btn-ghost" data-close>Abbrechen</button></div>`,
@@ -252,7 +261,8 @@ function recordHotkey() {
     window.removeEventListener('keyup', up, true);
     window.removeEventListener('keydown', down, true);
     if (!combo.length) { close(); return; }
-    if (await save({ hotkey: combo.join('+') })) ctx.toast(`Neue Taste: ${hotkeyLabel(combo.join('+'))}`);
+    const picked = combo.join('+');
+    if (await save({ [settingKey]: picked })) ctx.toast(`Neue Taste: ${hotkeyLabel(picked)}`);
     close();
     render();
   }

@@ -1,6 +1,7 @@
 """SQLite persistence: transcripts, dictionary, snippets and stats queries."""
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import threading
@@ -41,6 +42,26 @@ CREATE TABLE IF NOT EXISTS snippets (
     expansion TEXT NOT NULL,
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL DEFAULT '',
+    started_at REAL NOT NULL,
+    ended_at REAL,
+    status TEXT NOT NULL DEFAULT 'recording',
+    notes TEXT NOT NULL DEFAULT '',
+    summary TEXT,
+    action_items TEXT,
+    language TEXT NOT NULL DEFAULT '',
+    audio_path TEXT
+);
+CREATE TABLE IF NOT EXISTS session_segments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    start_s REAL NOT NULL,
+    end_s REAL NOT NULL,
+    text TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_segments_session ON session_segments(session_id, start_s);
 """
 
 MAX_PAGE = 500
@@ -145,6 +166,83 @@ class Store:
     def clear_audio_path(self, transcript_id: int) -> None:
         self._write("UPDATE transcripts SET audio_path=NULL WHERE id=?", (transcript_id,))
 
+    # --- sessions (long recordings) ---------------------------------------
+    def create_session(self, title: str, started_at: float, language: str) -> dict[str, Any]:
+        new_id = self._write(
+            "INSERT INTO sessions (title, started_at, language) VALUES (?,?,?)", (title, started_at, language)
+        )
+        return self.get_session(new_id)
+
+    def get_session(self, session_id: int) -> dict[str, Any]:
+        rows = self._query("SELECT * FROM sessions WHERE id=?", (session_id,))
+        if not rows:
+            raise KeyError(f"Sitzung {session_id} nicht gefunden")
+        return _decode_session(rows[0])
+
+    def list_sessions(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit), MAX_PAGE))
+        rows = self._query(
+            "SELECT * FROM sessions ORDER BY started_at DESC LIMIT ? OFFSET ?", (limit, int(offset))
+        )
+        return [_decode_session(r) for r in rows]
+
+    def add_session_segment(self, session_id: int, start_s: float, end_s: float, text: str) -> dict[str, Any]:
+        new_id = self._write(
+            "INSERT INTO session_segments (session_id, start_s, end_s, text) VALUES (?,?,?,?)",
+            (session_id, start_s, end_s, text),
+        )
+        return self._query("SELECT * FROM session_segments WHERE id=?", (new_id,))[0]
+
+    def session_segments(self, session_id: int) -> list[dict[str, Any]]:
+        return self._query(
+            "SELECT * FROM session_segments WHERE session_id=? ORDER BY start_s", (session_id,)
+        )
+
+    def finish_session(self, session_id: int, ended_at: float, status: str) -> None:
+        self._write("UPDATE sessions SET ended_at=?, status=? WHERE id=?", (ended_at, status, session_id))
+
+    def set_session_status(self, session_id: int, status: str) -> None:
+        self._write("UPDATE sessions SET status=? WHERE id=?", (status, session_id))
+
+    def update_session_notes(self, session_id: int, notes: str) -> None:
+        self._write("UPDATE sessions SET notes=? WHERE id=?", (notes, session_id))
+
+    def set_session_summary(self, session_id: int, summary: str | None, action_items: list[str] | None) -> None:
+        self._write(
+            "UPDATE sessions SET summary=?, action_items=? WHERE id=?",
+            (summary, json.dumps(action_items, ensure_ascii=False) if action_items is not None else None, session_id),
+        )
+
+    def set_session_audio(self, session_id: int, audio_path: str) -> None:
+        self._write("UPDATE sessions SET audio_path=? WHERE id=?", (audio_path, session_id))
+
+    def delete_session(self, session_id: int) -> str | None:
+        session = self.get_session(session_id)
+        self._write("DELETE FROM session_segments WHERE session_id=?", (session_id,))
+        self._write("DELETE FROM sessions WHERE id=?", (session_id,))
+        return session.get("audio_path")
+
+    def mark_interrupted_sessions(self) -> int:
+        """Sessions still marked as recording when the engine starts were cut off by a crash or shutdown."""
+        with self._lock:
+            cur = self._db.execute(
+                "UPDATE sessions SET status='error', ended_at=COALESCE(ended_at, ?) WHERE status='recording'",
+                (time.time(),),
+            )
+            self._db.commit()
+            return cur.rowcount
+
+    def session_audio_paths_beyond(self, keep: int) -> list[tuple[int, str]]:
+        rows = self._query(
+            "SELECT id, audio_path FROM sessions WHERE audio_path IS NOT NULL ORDER BY started_at DESC"
+            " LIMIT -1 OFFSET ?",
+            (keep,),
+        )
+        return [(r["id"], r["audio_path"]) for r in rows]
+
+    def clear_session_audio_path(self, session_id: int) -> None:
+        self._write("UPDATE sessions SET audio_path=NULL WHERE id=?", (session_id,))
+
     # --- dictionary --------------------------------------------------------
     def list_dictionary(self) -> list[dict[str, Any]]:
         return self._query("SELECT * FROM dictionary ORDER BY created_at DESC")
@@ -245,6 +343,11 @@ class Store:
             {"date": (start + timedelta(days=i)).isoformat(), "words": counts.get((start + timedelta(days=i)).isoformat(), 0)}
             for i in range(days)
         ]
+
+
+def _decode_session(row: dict[str, Any]) -> dict[str, Any]:
+    raw = row.get("action_items")
+    return {**row, "action_items": json.loads(raw) if raw else None}
 
 
 def summarize(

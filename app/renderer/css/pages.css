@@ -154,6 +154,34 @@
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .top-gap { margin-top: 12px; }
 
+/* ---- notes (long recordings) -------------------------------------------------- */
+.notes-layout { display: grid; grid-template-columns: minmax(220px, 290px) 1fr; gap: 18px; align-items: start; }
+.session-row { width: 100%; display: flex; align-items: center; gap: 10px; text-align: left; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.session-row.selected { background: var(--card-2); }
+.session-main { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.session-main b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session-main small { color: var(--muted); font-size: 12px; }
+.notes-detail { padding: 22px 24px; min-height: 360px; }
+.notes-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+.notes-title { font-size: 26px; line-height: 1.15; }
+.notes-tabs { margin-bottom: 14px; gap: 16px; overflow-x: auto; overflow-y: hidden; }
+.notes-tabs button { white-space: nowrap; }
+.notes-tools { display: flex; justify-content: flex-end; min-height: 0; margin-bottom: 12px; }
+.notes-tools:empty { margin-bottom: 0; }
+.notes-tools .tab-search { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.notes-tools .tab-search .search-input { width: 220px; }
+#n-actions .btn { white-space: nowrap; }
+.seg-list { display: grid; gap: 2px; max-height: 60vh; overflow-y: auto; }
+.segment { display: grid; grid-template-columns: 48px 1fr; gap: 12px; padding: 8px 10px; border-radius: 8px; line-height: 1.55; transition: background var(--fast); }
+.segment:hover { background: var(--card-2); }
+.segment time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12.5px; padding-top: 2px; }
+.summary-text { white-space: pre-wrap; line-height: 1.6; font-family: var(--font-serif); font-size: 16px; }
+.tasks-head { margin: 18px 0 8px; font-size: 13px; color: var(--text-2); }
+.task-list { display: grid; gap: 6px; padding-left: 18px; list-style: disc; }
+.notes-editor { width: 100%; min-height: 320px; font-family: var(--font-serif); font-size: 16px; line-height: 1.6; }
+.empty-action { text-align: center; margin-top: 12px; }
+@media (max-width: 760px) { .notes-layout { grid-template-columns: 1fr; } }
+
 /* ---- dictionary + snippets ------------------------------------------------ */
 .tab-tools .icon-btn { width: 28px; height: 28px; }
 .tab-search .search-input { width: 160px; padding: 4px 8px; border-bottom: 1px solid var(--border-strong); }

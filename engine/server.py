@@ -8,12 +8,14 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+import numpy as np
 import websockets
 from websockets.asyncio.server import ServerConnection
 
 from . import audio, config, ducking, insights, llm, output, pipeline, style, textproc
 from .accounts import AccountStore, AuthError
-from .hotkey import HotkeyController
+from .hotkey import HotkeyController, validate_hotkey
+from .sessions import Segment, Segmenter
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -21,6 +23,8 @@ log = logging.getLogger(__name__)
 HOST, PORT = "127.0.0.1", 47821
 MIN_DURATION_S = 0.35
 KEEP_AUDIO_FILES = 200
+SESSION_KEEP_AUDIO = 50  # session recordings kept on disk, counted separately from dictations
+SESSION_TICK_S = 1.0  # how often the live audio is taken from the recorder
 LEVEL_INTERVAL_S = 0.1  # mean of the scaled block levels per window
 ALLOWED_ORIGINS = {None, "null", "file://"}
 
@@ -50,6 +54,17 @@ class Engine:
             on_cancel=lambda: self._threadsafe(self.cancel_recording),
             on_hands_free=lambda: self._threadsafe(self._enter_hands_free),
         )
+        self.session_hotkey = HotkeyController(
+            on_start=lambda: self._threadsafe(self._session_toggle),
+            on_stop=lambda: self._threadsafe(self._session_toggle),
+            on_cancel=lambda: None,  # Esc must not discard a session
+            on_hands_free=lambda: None,
+        )
+        self.session_id: int | None = None
+        self._session_running = False
+        self._session_task: asyncio.Task | None = None
+        self._session_segmenter: Segmenter | None = None
+        self._session_wav: audio.WavWriter | None = None
 
     # --- lifecycle ---------------------------------------------------------
     async def run(self) -> None:
@@ -60,6 +75,7 @@ class Engine:
             if remembered:
                 self._activate(remembered)
             self.hotkey.configure(self.settings["hotkey"], self.settings["tap_for_hands_free"])
+            self._configure_session_hotkey()
             await asyncio.to_thread(self.ducker.recover_leftover)
             asyncio.create_task(self._level_pump())
             await self._load_model()
@@ -79,6 +95,7 @@ class Engine:
         if not self.settings.get("user_name"):
             self.settings = {**self.settings, "user_name": account.name}
         self.store = Store(self.account_dir / "murmel.db")
+        self.store.mark_interrupted_sessions()
         log.info("Account aktiv: %s", account.name)
 
     def _deactivate(self) -> None:
@@ -89,6 +106,8 @@ class Engine:
     async def _after_account_change(self, previous: dict[str, Any]) -> None:
         if (previous["hotkey"], previous["tap_for_hands_free"]) != (self.settings["hotkey"], self.settings["tap_for_hands_free"]):
             self.hotkey.configure(self.settings["hotkey"], self.settings["tap_for_hands_free"])
+        if previous["session_hotkey"] != self.settings["session_hotkey"]:
+            self._configure_session_hotkey()
         await self.broadcast({"type": "account", "account": self.account.public() if self.account else None})
         await self.broadcast(self._state_msg())
         if (previous["model"], previous["device"]) != (self.settings["model"], self.settings["device"]):
@@ -98,6 +117,10 @@ class Engine:
         if not self.store:
             raise AuthError("Bitte melde dich zuerst an")
         return self.store
+
+    def _require_no_session(self) -> None:
+        if self.session_id is not None:
+            raise ValueError("Bitte beende zuerst die laufende Sitzung")
 
     async def _load_model(self) -> None:
         from .stt import Transcriber  # heavy import, keep server responsive first
@@ -119,6 +142,10 @@ class Engine:
 
     # --- recording flow ----------------------------------------------------
     async def start_recording(self) -> None:
+        if self.session_id is not None:
+            self.hotkey.set_recording(False)
+            await self.broadcast({"type": "notice", "text": "Während einer Sitzung ist Diktieren gesperrt."})
+            return
         if self.state not in ("idle", "error") or not self.transcriber:
             self.hotkey.set_recording(False)
             return
@@ -221,6 +248,177 @@ class Engine:
             Path(path).unlink(missing_ok=True)
             store.clear_audio_path(transcript_id)
 
+    # --- sessions (long recordings) ------------------------------------------
+    @staticmethod
+    def _check_hotkeys(settings: dict[str, Any]) -> None:
+        dictation = set(validate_hotkey(settings["hotkey"]))
+        session_hotkey = (settings.get("session_hotkey") or "").strip()
+        if not session_hotkey:
+            return
+        if set(validate_hotkey(session_hotkey)) == dictation:
+            raise ValueError("Die Sitzungs-Taste muss sich von der Diktier-Taste unterscheiden")
+
+    def _configure_session_hotkey(self) -> None:
+        hotkey = (self.settings.get("session_hotkey") or "").strip()
+        if not hotkey:
+            self.session_hotkey.unhook()
+            return
+        try:
+            self.session_hotkey.configure(hotkey, tap_for_hands_free=True)
+        except ValueError:
+            log.warning("Ungültiger Sitzungs-Hotkey: %s", hotkey)
+            self.session_hotkey.unhook()
+
+    async def _session_toggle(self) -> None:
+        try:
+            if self.session_id is None:
+                await self.api_session_start()
+            else:
+                await self.api_session_stop()
+        except Exception as exc:  # noqa: BLE001 - the hotkey has no caller to return the error to
+            self.session_hotkey.set_recording(False)
+            await self.broadcast({"type": "notice", "text": str(exc)})
+
+    async def api_session_start(self, title: str = "") -> dict[str, Any]:
+        store = self._require_store()
+        if self.session_id is not None:
+            raise ValueError("Es läuft schon eine Sitzung")
+        if not self.transcriber or self.state not in ("idle", "error"):
+            raise ValueError("Bitte warte, bis Murmel bereit ist")
+        started = time.time()
+        name = title.strip() or time.strftime("Sitzung %d.%m.%Y %H:%M", time.localtime(started))
+        session = store.create_session(name, started, self.settings["language"])
+        wav = None
+        try:
+            wav = self._open_session_audio(session["id"])
+            self.recorder.start(self.settings.get("mic_device"))
+        except Exception as exc:
+            if wav:
+                wav.close()
+            store.finish_session(session["id"], time.time(), "error")
+            raise ValueError(f"Aufnahme konnte nicht starten: {exc}") from exc
+        self.session_id = session["id"]
+        self._session_running = True
+        self._session_segmenter = Segmenter()
+        self._session_wav = wav
+        self.session_hotkey.set_recording(True)
+        self._session_task = asyncio.create_task(self._session_loop(session["id"]))
+        await self.broadcast({"type": "session_status", "session": session})
+        return session
+
+    async def api_session_stop(self) -> dict[str, Any]:
+        if self.session_id is None or self._session_task is None:
+            raise ValueError("Keine Sitzung aktiv")
+        session_id = self.session_id
+        self._session_running = False
+        self.session_hotkey.set_recording(False)
+        await self._session_task
+        return self._require_store().get_session(session_id)
+
+    def _open_session_audio(self, session_id: int) -> audio.WavWriter | None:
+        if not (self.settings.get("session_keep_audio") and self.account_dir):
+            return None
+        path = self.account_dir / "audio" / f"session-{session_id}.wav"
+        self._require_store().set_session_audio(session_id, str(path))
+        return audio.WavWriter(path)
+
+    async def _session_loop(self, session_id: int) -> None:
+        store = self._require_store()
+        try:
+            while self._session_running:
+                await asyncio.sleep(SESSION_TICK_S)
+                await self._session_feed(session_id, self.recorder.drain())
+            await self._session_feed(session_id, self.recorder.stop())
+            last = self._session_segmenter.flush()
+            if last:
+                await self._session_save(session_id, last)
+            store.finish_session(session_id, time.time(), "done")
+            if self.settings["llm"].get("enabled"):
+                await self._run_summary(session_id)
+        except Exception:  # noqa: BLE001 - keep the engine alive, the session is marked as failed
+            log.exception("Sitzung fehlgeschlagen")
+            store.finish_session(session_id, time.time(), "error")
+        finally:
+            if self.recorder.active:
+                self.recorder.stop()
+            if self._session_wav:
+                self._session_wav.close()
+                self._session_wav = None
+            self.session_id = None
+        self._prune_session_audio(store)
+        await self.broadcast({"type": "session_status", "session": store.get_session(session_id)})
+
+    async def _session_feed(self, session_id: int, samples: np.ndarray) -> None:
+        if self._session_wav and samples.size:
+            self._session_wav.write(samples)
+        for segment in self._session_segmenter.feed(samples):
+            await self._session_save(session_id, segment)
+
+    async def _session_save(self, session_id: int, segment: Segment) -> None:
+        if segment.end_s - segment.start_s < MIN_DURATION_S:  # too short to transcribe reliably
+            return
+        text = await asyncio.to_thread(self._transcribe_session_segment, segment.samples)
+        if not text:
+            return
+        row = self._require_store().add_session_segment(session_id, segment.start_s, segment.end_s, text)
+        await self.broadcast({"type": "session_segment", "session_id": session_id, "segment": row})
+
+    def _transcribe_session_segment(self, samples: np.ndarray) -> str:
+        s = self.settings
+        store = self._require_store()
+        result = self.transcriber.transcribe(samples, s["language"], s["beam_size"], store.vocabulary())
+        text = textproc.remove_fillers(result.text) if s["remove_fillers"] else result.text
+        return textproc.apply_corrections(text, store.corrections()).strip()
+
+    async def _run_summary(self, session_id: int) -> None:
+        store = self._require_store()
+        store.set_session_status(session_id, "processing")
+        text = " ".join(seg["text"] for seg in store.session_segments(session_id))
+        try:
+            summary, items = await asyncio.to_thread(llm.summarize_session, text, self.settings["llm"])
+        except Exception:  # noqa: BLE001 - the transcript stays usable without a summary
+            log.exception("Zusammenfassung fehlgeschlagen")
+            store.set_session_status(session_id, "error")
+            return
+        store.set_session_summary(session_id, summary, items)
+        store.set_session_status(session_id, "done")
+
+    @staticmethod
+    def _prune_session_audio(store: Store) -> None:
+        for session_id, path in store.session_audio_paths_beyond(SESSION_KEEP_AUDIO):
+            Path(path).unlink(missing_ok=True)
+            store.clear_session_audio_path(session_id)
+
+    async def api_session_list(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        return self._require_store().list_sessions(limit, offset)
+
+    async def api_session_get(self, id: int) -> dict[str, Any]:  # noqa: A002
+        store = self._require_store()
+        return {**store.get_session(id), "segments": store.session_segments(id)}
+
+    async def api_session_update_notes(self, id: int, notes: str) -> dict[str, Any]:  # noqa: A002
+        store = self._require_store()
+        store.update_session_notes(id, notes)
+        return store.get_session(id)
+
+    async def api_session_delete(self, id: int) -> None:  # noqa: A002
+        if id == self.session_id:
+            raise ValueError("Die laufende Sitzung kann nicht gelöscht werden")
+        path = self._require_store().delete_session(id)
+        if path:
+            Path(path).unlink(missing_ok=True)
+
+    async def api_session_summarize(self, id: int) -> dict[str, Any]:  # noqa: A002
+        store = self._require_store()
+        if id == self.session_id:
+            raise ValueError("Die laufende Sitzung kann noch nicht zusammengefasst werden")
+        if not self.settings["llm"].get("enabled"):
+            raise ValueError("Die KI-Zusammenfassung ist deaktiviert")
+        await self._run_summary(id)
+        session = store.get_session(id)
+        await self.broadcast({"type": "session_status", "session": session})
+        return session
+
     # --- broadcasting ------------------------------------------------------
     @staticmethod
     def _new_band_scalers() -> list[audio.LevelScaler]:
@@ -292,8 +490,11 @@ class Engine:
 
     async def api_set_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
         new = config.update_settings(self.settings, patch)
+        self._check_hotkeys(new)  # validate before anything changes, so a bad value is never saved
         if "hotkey" in patch or "tap_for_hands_free" in patch:
             self.hotkey.configure(new["hotkey"], new["tap_for_hands_free"])
+        if "session_hotkey" in patch:
+            self._configure_session_hotkey()
         reload_model = any(k in patch for k in ("model", "device"))
         self.settings = new
         config.save_settings(new, self.settings_path)
@@ -400,6 +601,7 @@ class Engine:
         return await self._login_as(account, remember)
 
     async def _login_as(self, account, remember: bool) -> dict[str, Any]:
+        self._require_no_session()
         if self.recorder.active:
             await self.cancel_recording()
         previous = self.settings
@@ -409,6 +611,7 @@ class Engine:
         return {"account": account.public(), "settings": self.settings}
 
     async def api_auth_logout(self) -> None:
+        self._require_no_session()
         if self.recorder.active:
             await self.cancel_recording()
         previous = self.settings
@@ -436,6 +639,7 @@ class Engine:
 
     async def api_transcribe_wav(self, path: str) -> dict[str, Any] | None:
         """Run a 16 kHz mono wav through the full pipeline without pasting (diagnostics/tests)."""
+        self._require_no_session()
         import wave
 
         import numpy as np

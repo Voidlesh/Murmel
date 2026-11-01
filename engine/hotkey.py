@@ -18,6 +18,16 @@ log = logging.getLogger(__name__)
 TAP_MAX_S = 0.3
 
 
+def validate_hotkey(hotkey: str) -> list[str]:
+    """Key names of a combo such as 'ctrl+windows'; raises ValueError for empty or unknown keys."""
+    keys = [k.strip().lower() for k in hotkey.split("+") if k.strip()]
+    if not keys:
+        raise ValueError("Hotkey darf nicht leer sein")
+    for k in keys:
+        keyboard.key_to_scan_codes(k)  # raises ValueError for unknown names
+    return keys
+
+
 class HotkeyController:
     def __init__(
         self,
@@ -39,11 +49,7 @@ class HotkeyController:
         self._lock = threading.Lock()
 
     def configure(self, hotkey: str, tap_for_hands_free: bool) -> None:
-        keys = [k.strip().lower() for k in hotkey.split("+") if k.strip()]
-        if not keys:
-            raise ValueError("Hotkey darf nicht leer sein")
-        for k in keys:
-            keyboard.key_to_scan_codes(k)  # raises ValueError for unknown names
+        keys = validate_hotkey(hotkey)
         self.unhook()
         self._keys, self._tap_enabled = keys, tap_for_hands_free
         if len(keys) == 1:
