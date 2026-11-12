@@ -52,8 +52,27 @@ def test_delete_session_removes_segments_and_returns_audio_path(store):
 def test_interrupted_sessions_are_marked_on_startup(store):
     session = store.create_session("", started_at=1.0, language="de")
     assert store.mark_interrupted_sessions() == 1
-    assert store.get_session(session["id"])["status"] == "error"
+    assert store.get_session(session["id"])["status"] == "interrupted"
     assert store.mark_interrupted_sessions() == 0
+
+
+def test_cut_off_rerun_keeps_the_old_transcript_as_done(store):
+    session = store.create_session("", started_at=1.0, language="de", status="processing")
+    store.add_session_segment(session["id"], 0.0, 2.0, "alt")
+    store.mark_interrupted_sessions()
+    assert store.get_session(session["id"])["status"] == "done"
+    assert [s["text"] for s in store.session_segments(session["id"])] == ["alt"]
+
+
+def test_replace_segments_swaps_the_whole_transcript(store):
+    session = store.create_session("", started_at=1.0, language="de", source="desktop", terms="Eigenwert")
+    store.add_session_segment(session["id"], 0.0, 2.0, "alt")
+    store.replace_session_segments(session["id"], [("them", 0.0, 1.0, "neu"), ("you", 1.0, 2.0, "auch neu")])
+    assert [(s["speaker"], s["text"]) for s in store.session_segments(session["id"])] == [
+        ("them", "neu"), ("you", "auch neu"),
+    ]
+    stored = store.get_session(session["id"])
+    assert (stored["source"], stored["terms"]) == ("desktop", "Eigenwert")
 
 
 def test_session_audio_pruning_keeps_newest(store):

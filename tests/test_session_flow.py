@@ -22,7 +22,7 @@ class FakeRecorder:
         self.active = False
         self.pending = np.zeros(0, dtype=np.float32)
 
-    def start(self, device=None) -> None:
+    def start(self, device=None, **kwargs) -> None:
         self.active = True
 
     def drain(self) -> np.ndarray:
@@ -38,7 +38,7 @@ class FakeTranscriber:
     model_name = "fake"
     device = "cpu"
 
-    def transcribe(self, audio, language, beam_size, vocabulary):
+    def transcribe(self, audio, language, beam_size, vocabulary, strict=False):
         from engine.stt import SttResult
 
         return SttResult(f"abschnitt {audio.size}", "de", 1)
@@ -129,7 +129,7 @@ def test_running_session_cannot_be_summarized(engine):
 
 
 def test_failed_microphone_start_leaves_no_running_session(engine):
-    def broken_start(device=None):
+    def broken_start(device=None, **kwargs):
         raise OSError("Gerät belegt")
 
     engine.recorder.start = broken_start

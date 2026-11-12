@@ -47,17 +47,19 @@ CREATE TABLE IF NOT EXISTS sessions (
     title TEXT NOT NULL DEFAULT '',
     started_at REAL NOT NULL,
     ended_at REAL,
-    status TEXT NOT NULL DEFAULT 'recording',
+    status TEXT NOT NULL DEFAULT 'recording',  -- recording | processing | done | interrupted | error
     notes TEXT NOT NULL DEFAULT '',
     summary TEXT,
     action_items TEXT,
     language TEXT NOT NULL DEFAULT '',
-    audio_path TEXT
+    audio_path TEXT,
+    source TEXT NOT NULL DEFAULT '',           -- both | desktop | mic | import; '' = older mic-only sessions
+    terms TEXT NOT NULL DEFAULT ''             -- technical terms for this session, comma separated
 );
 CREATE TABLE IF NOT EXISTS session_segments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL,
-    speaker TEXT NOT NULL DEFAULT 'you',       -- you | them
+    speaker TEXT NOT NULL DEFAULT 'you',       -- you | them | system (notes like a reconnect)
     start_s REAL NOT NULL,
     end_s REAL NOT NULL,
     text TEXT NOT NULL
@@ -67,6 +69,10 @@ CREATE INDEX IF NOT EXISTS idx_segments_session ON session_segments(session_id, 
 
 MAX_PAGE = 500
 SEGMENT_SPEAKER_MIGRATION = "ALTER TABLE session_segments ADD COLUMN speaker TEXT NOT NULL DEFAULT 'you'"  # older sessions had one speaker
+SESSION_MIGRATIONS = (
+    "ALTER TABLE sessions ADD COLUMN source TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE sessions ADD COLUMN terms TEXT NOT NULL DEFAULT ''",
+)
 MIGRATIONS = (
     "ALTER TABLE transcripts ADD COLUMN fixes_words INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE transcripts ADD COLUMN fixes_dict INTEGER NOT NULL DEFAULT 0",
@@ -89,6 +95,10 @@ class Store:
             segment_columns = {r[1] for r in self._db.execute("PRAGMA table_info(session_segments)")}
             if "speaker" not in segment_columns:
                 self._db.execute(SEGMENT_SPEAKER_MIGRATION)
+            session_columns = {r[1] for r in self._db.execute("PRAGMA table_info(sessions)")}
+            for sql in SESSION_MIGRATIONS:
+                if sql.split("ADD COLUMN ")[1].split()[0] not in session_columns:
+                    self._db.execute(sql)
             self._db.commit()
 
     def close(self) -> None:
@@ -172,9 +182,13 @@ class Store:
         self._write("UPDATE transcripts SET audio_path=NULL WHERE id=?", (transcript_id,))
 
     # --- sessions (long recordings) ---------------------------------------
-    def create_session(self, title: str, started_at: float, language: str) -> dict[str, Any]:
+    def create_session(
+        self, title: str, started_at: float, language: str, source: str = "", terms: str = "",
+        status: str = "recording",
+    ) -> dict[str, Any]:
         new_id = self._write(
-            "INSERT INTO sessions (title, started_at, language) VALUES (?,?,?)", (title, started_at, language)
+            "INSERT INTO sessions (title, started_at, language, source, terms, status) VALUES (?,?,?,?,?,?)",
+            (title, started_at, language, source, terms, status),
         )
         return self.get_session(new_id)
 
@@ -205,6 +219,22 @@ class Store:
             "SELECT * FROM session_segments WHERE session_id=? ORDER BY start_s", (session_id,)
         )
 
+    def replace_session_segments(self, session_id: int, rows: list[tuple[str, float, float, str]]) -> None:
+        """Swap the whole transcript in one transaction, so a failed re-run never leaves half a transcript."""
+        with self._lock:
+            with self._db:
+                self._db.execute("DELETE FROM session_segments WHERE session_id=?", (session_id,))
+                self._db.executemany(
+                    "INSERT INTO session_segments (session_id, speaker, start_s, end_s, text) VALUES (?,?,?,?,?)",
+                    [(session_id, speaker, start, end, text) for speaker, start, end, text in rows],
+                )
+
+    def update_session_title(self, session_id: int, title: str) -> None:
+        self._write("UPDATE sessions SET title=? WHERE id=?", (title, session_id))
+
+    def set_session_ended(self, session_id: int, ended_at: float) -> None:
+        self._write("UPDATE sessions SET ended_at=? WHERE id=?", (ended_at, session_id))
+
     def finish_session(self, session_id: int, ended_at: float, status: str) -> None:
         self._write("UPDATE sessions SET ended_at=?, status=? WHERE id=?", (ended_at, status, session_id))
 
@@ -230,12 +260,16 @@ class Store:
         return session.get("audio_path")
 
     def mark_interrupted_sessions(self) -> int:
-        """Sessions still marked as recording when the engine starts were cut off by a crash or shutdown."""
+        """Sessions still marked as recording when the engine starts were cut off by a crash or shutdown.
+
+        Their transcript is kept up to the cut, so they are 'interrupted', not failed. A re-run that was cut off
+        never replaced the old transcript, so those sessions are simply done."""
         with self._lock:
             cur = self._db.execute(
-                "UPDATE sessions SET status='error', ended_at=COALESCE(ended_at, ?) WHERE status='recording'",
+                "UPDATE sessions SET status='interrupted', ended_at=COALESCE(ended_at, ?) WHERE status='recording'",
                 (time.time(),),
             )
+            self._db.execute("UPDATE sessions SET status='done' WHERE status='processing'")
             self._db.commit()
             return cur.rowcount
 

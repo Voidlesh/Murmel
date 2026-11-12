@@ -18,7 +18,7 @@ class HoldingRecorder:
 
 
 class FakeTranscriber:
-    def transcribe(self, audio, language, beam_size, vocabulary):
+    def transcribe(self, audio, language, beam_size, vocabulary, strict=False):
         from engine.stt import SttResult
 
         return SttResult(f"zwischenstand {audio.size}", "de", 1)

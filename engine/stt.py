@@ -19,6 +19,10 @@ CPU_FALLBACK_MODEL = "small"
 # GTX 16xx cards have crippled FP16 paths, so int8 weights + fp32 compute wins.
 CUDA_COMPUTE_TYPE = "int8_float32"
 MAX_PROMPT_WORDS = 60
+# Whisper's own quality signals; the same thresholds the reference implementation uses to reject output.
+NO_SPEECH_PROB = 0.6
+LOW_LOGPROB = -1.0
+MAX_COMPRESSION = 2.4  # highly compressible text is a repetition loop
 
 
 def _cuda_roots() -> list[str]:
@@ -77,11 +81,16 @@ class Transcriber:
         segments, _ = model.transcribe(np.zeros(16000, dtype=np.float32), beam_size=1, language="de")
         list(segments)
 
-    def transcribe(self, audio: np.ndarray, language: str | None, beam_size: int, vocabulary: list[str]) -> SttResult:
+    def transcribe(
+        self, audio: np.ndarray, language: str | None, beam_size: int, vocabulary: list[str], strict: bool = False,
+    ) -> SttResult:
+        """strict: drop pieces Whisper itself marks as no speech or as a loop (long recordings with music/silence)."""
         with self._lock:  # live previews and the final text may run at the same time, the model is not thread-safe
-            return self._transcribe(audio, language, beam_size, vocabulary)
+            return self._transcribe(audio, language, beam_size, vocabulary, strict)
 
-    def _transcribe(self, audio: np.ndarray, language: str | None, beam_size: int, vocabulary: list[str]) -> SttResult:
+    def _transcribe(
+        self, audio: np.ndarray, language: str | None, beam_size: int, vocabulary: list[str], strict: bool = False,
+    ) -> SttResult:
         started = time.perf_counter()
         prompt = ", ".join(vocabulary[:MAX_PROMPT_WORDS]) or None
         segments, info = self._model.transcribe(
@@ -95,5 +104,12 @@ class Transcriber:
             # hotwords biased too hard in tests ("das Team" -> "das Tim"); the prompt alone is enough
             initial_prompt=prompt,
         )
-        text = " ".join(s.text.strip() for s in segments).strip()
+        text = " ".join(s.text.strip() for s in segments if not (strict and is_unreliable(s))).strip()
         return SttResult(text, info.language, int((time.perf_counter() - started) * 1000))
+
+
+def is_unreliable(segment) -> bool:
+    """True for a Whisper segment that is most likely not speech or a hallucinated loop."""
+    no_speech = getattr(segment, "no_speech_prob", 0.0) > NO_SPEECH_PROB
+    low_conf = getattr(segment, "avg_logprob", 0.0) < LOW_LOGPROB
+    return (no_speech and low_conf) or getattr(segment, "compression_ratio", 0.0) > MAX_COMPRESSION
