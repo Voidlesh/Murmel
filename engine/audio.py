@@ -119,13 +119,52 @@ class StreamResampler:
         return out
 
 
-def default_loopback_name() -> str:
-    """Name of the playback device Windows uses right now. A fresh PyAudio is needed, it caches the device list."""
+def query_default_loopback_name() -> str:
+    """Name of the playback device Windows uses right now, as seen by a PortAudio started in this process."""
     pa = pyaudio.PyAudio()
     try:
         return str(pa.get_default_wasapi_loopback()["name"])
     finally:
         pa.terminate()
+
+
+DEVICE_QUERY_FLAG = "--default-loopback"
+DEVICE_QUERY_TIMEOUT_S = 15.0
+
+
+def default_loopback_name() -> str:
+    """The current default playback device, asked in a short-lived child process.
+
+    PortAudio is initialized once per process and keeps the device list from that moment; while the
+    session's own loopback stream is open, a new PyAudio in this process would still report the old device.
+    A fresh process sees the real current default. Returns '' if the question cannot be answered."""
+    import subprocess
+    import sys
+    import tempfile
+
+    out = Path(tempfile.gettempdir()) / f"murmel-device-{os.getpid()}.txt"
+    out.unlink(missing_ok=True)
+    if getattr(sys, "frozen", False):
+        command = [sys.executable, DEVICE_QUERY_FLAG, str(out)]
+    else:
+        command = [sys.executable, "-m", "engine", DEVICE_QUERY_FLAG, str(out)]
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    root = Path(__file__).resolve().parent.parent
+    try:
+        result = subprocess.run(  # windowed builds may have no stdout, so the answer comes back in a file
+            command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=DEVICE_QUERY_TIMEOUT_S, creationflags=flags,
+            cwd=None if getattr(sys, "frozen", False) else str(root),
+        )
+        if result.returncode != 0 or not out.exists():
+            return ""
+        return out.read_text(encoding="utf-8").strip()
+    except (OSError, subprocess.SubprocessError):
+        log.debug("Gerätesuche fehlgeschlagen", exc_info=True)
+        return ""
+    finally:
+        with contextlib.suppress(OSError):
+            out.unlink(missing_ok=True)
 
 
 class LoopbackStream:

@@ -381,3 +381,95 @@ def test_cpu_fallback_is_reported(engine):
     engine.transcriber.device = "cpu"
     engine.settings = {**engine.settings, "device": "auto"}
     assert engine._stt_info()["fallback"] is True
+
+
+def test_one_failing_segment_does_not_stop_the_live_transcript(engine):
+    sent = capture(engine)
+    calls = {"n": 0}
+    real = engine.transcriber.transcribe
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("CUDA out of memory")
+        return real(*args, **kwargs)
+
+    engine.transcriber.transcribe = flaky
+
+    def feed():
+        engine._system_recorder.pending = np.concatenate([tone(6), silence(1.0), tone(6), silence(1.0), tone(3)])
+
+    session, finished = run_session(engine, feed, source="desktop")
+    assert finished["status"] == "done"
+    assert len(engine.store.session_segments(session["id"])) == 2  # the first failed, the others still came
+    kinds = [m.get("kind") for m in sent if m["type"] == "session_warning"]
+    assert "transcribe_error" in kinds
+
+
+def test_a_failing_tick_does_not_end_the_recording(engine, monkeypatch):
+    sent = capture(engine)
+    real = engine._session_watchdog
+    calls = {"n": 0}
+
+    async def flaky(live):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("kurz weg")
+        await real(live)
+
+    monkeypatch.setattr(engine, "_session_watchdog", flaky)
+
+    def feed():
+        engine._system_recorder.pending = np.concatenate([tone(6), silence(1.0)])
+
+    session, finished = run_session(engine, feed, ticks=3, source="desktop")
+    assert finished["status"] == "done"
+    assert any(m.get("kind") == "loop_error" for m in sent if m["type"] == "session_warning")
+
+
+def test_reconnect_clears_its_own_warning_only(engine):
+    sent = capture(engine)
+    attempts = {"n": 0}
+
+    def restart():
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise OSError("Gerät weg")
+        engine._system_recorder.alive = True
+
+    engine._system_recorder.restart = restart
+
+    async def scenario():
+        await engine.api_session_start(source="desktop")
+        engine._system_recorder.alive = False
+        await asyncio.sleep(server.SESSION_TICK_S * 2.5)
+        await engine.api_session_stop()
+
+    asyncio.run(scenario())
+    warnings = [m for m in sent if m["type"] == "session_warning"]
+    assert any(m["kind"] == "stream_lost_them" for m in warnings)
+    assert any(m["kind"] == "clear" and m["clears"] == "stream_lost_them" for m in warnings)
+
+
+def test_device_query_returns_empty_when_the_child_fails(monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1))
+    assert audio.default_loopback_name() == ""
+
+
+def test_device_query_child_writes_the_name(tmp_path, monkeypatch):
+    from engine import __main__ as entry
+
+    monkeypatch.setattr(audio, "query_default_loopback_name", lambda: "Kopfhörer (USB) [Loopback]")
+    target = tmp_path / "out.txt"
+    with pytest.raises(SystemExit) as stop:
+        entry._write_default_loopback(str(target))
+    assert stop.value.code == 0
+    assert target.read_text(encoding="utf-8") == "Kopfhörer (USB) [Loopback]"
+
+
+def test_markdown_always_names_the_speaker():
+    session = {"title": "VL", "started_at": 0, "ended_at": 10, "source": "desktop"}
+    md = export.to_markdown(session, [{"speaker": "them", "start_s": 0.0, "end_s": 5.0, "text": "Hallo."}])
+    assert "**Gegenüber** `[00:00]` Hallo." in md

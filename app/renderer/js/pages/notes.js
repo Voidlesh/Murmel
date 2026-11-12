@@ -25,7 +25,8 @@ let tab = 'transcript';
 let query = '';
 let pendingNotes = null;
 let saveTimer = null;
-let live = { levels: {}, lag: 0, warning: '', finishing: false };
+const freshLive = () => ({ levels: {}, lag: 0, warnings: {}, finishing: false });
+let live = freshLive();
 let progress = {}; // session id -> 0..1 while re-run or import is busy
 let ticker = null;
 
@@ -87,10 +88,9 @@ const running = () => sessions.some((s) => s.status === 'recording');
 // ---- engine events (pushed by the engine, see app.js) -------------------------
 export function onSessionStatus(session) {
   if (!root) return;
-  if (session.status !== 'recording') {
-    resetLivePreview();
-    if (session.id === detail?.id) live = { levels: {}, lag: 0, warning: '', finishing: false };
-  }
+  const before = sessions.find((s) => s.id === session.id)?.status;
+  if (session.status === 'recording' && before !== 'recording') live = freshLive(); // a new recording starts clean
+  if (session.status !== 'recording' && before === 'recording') { resetLivePreview(); live = freshLive(); }
   if (session.status !== 'processing') delete progress[session.id];
   const known = sessions.some((s) => s.id === session.id);
   sessions = known
@@ -137,7 +137,8 @@ export function onSessionEvent(msg) {
     live.lag = msg.lag_s;
     renderMeters();
   } else if (msg.type === 'session_warning') {
-    live.warning = msg.kind === 'clear' ? '' : msg.text;
+    if (msg.kind === 'clear') delete live.warnings[msg.clears];
+    else live.warnings[msg.kind] = msg.text;
     renderLivePanel();
   } else if (msg.type === 'session_finishing') {
     live.finishing = true;
@@ -243,9 +244,11 @@ function livePanelHtml() {
       <span class="meter-label">${sp === 'them' ? 'Desktop' : 'Mikrofon'}</span>
       <span class="meter-track"><i></i></span>
     </div>`).join('');
+  const warnings = Object.values(live.warnings);
+  if (detail.stt?.fallback) warnings.unshift('Die Grafikkarte ist nicht nutzbar: Murmel nutzt das kleine CPU-Modell, das Transkript wird ungenauer. NVIDIA-Treiber prüfen und Murmel neu starten.');
   return `
-    <div class="live-panel${live.warning ? ' has-warning' : ''}">
-      ${live.warning ? `<div class="live-warning" role="alert"><span class="ic i-triangle-alert"></span>${escapeHtml(live.warning)}</div>` : ''}
+    <div class="live-panel${warnings.length ? ' has-warning' : ''}">
+      ${warnings.map((text) => `<div class="live-warning" role="alert"><span class="ic i-triangle-alert"></span>${escapeHtml(text)}</div>`).join('')}
       <div class="live-row">
         <div class="live-clock"><i class="live-dot"></i><span id="n-clock">${escapeHtml(elapsed())}</span></div>
         <div class="meters">${meters}</div>
@@ -367,6 +370,7 @@ function openStartDialog() {
         <select class="input" name="language">${LANGUAGES.map(([k, l]) => `<option value="${k}" ${k === lang ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       <label class="field"><span>Fachbegriffe <small>(optional, mit Komma getrennt)</small></span>
         <textarea class="textarea" name="terms" rows="2" placeholder="Eigenwert, Diagonalisierung, Jordan-Normalform"></textarea></label>
+      ${/CPU/.test(ctx.engine?.detail || '') ? '<p class="live-warning" role="alert"><span class="ic i-triangle-alert"></span>Murmel läuft gerade auf der CPU statt der Grafikkarte. Das Transkript wird ungenauer und kann hinterherhinken.</p>' : ''}
       <p class="hint-text">Tipp: Starte die Sitzung erst, wenn Kopfhörer verbunden sind und der Ton der Vorlesung läuft.</p>
       <div class="modal-actions"><button type="button" class="btn btn-ghost" data-close>Abbrechen</button>
         <button type="submit" class="btn btn-light" id="start-ok"><span class="ic i-mic"></span>Aufnahme starten</button></div>
@@ -387,7 +391,7 @@ function openStartDialog() {
         // only remembers the choice for next time, must never block the recording
         await ctx.saveSettings({ session_source: params.source }).catch(() => {});
       }
-      live = { levels: {}, lag: 0, warning: '', finishing: false };
+      live = freshLive();
       const started = await ctx.call('session_start', params);
       close();
       tab = 'transcript';

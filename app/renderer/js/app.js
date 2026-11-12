@@ -212,6 +212,24 @@ function wireChrome() {
   if (readPref(SIDEBAR_KEY, '0') === '1') document.body.classList.add('sidebar-collapsed');
 }
 
+// ---- keep Windows awake while a session records ----------------------------------
+// Only the running session decides; status updates of other sessions (rename, re-run) must not release it.
+let recordingId = null;
+function trackRecording(session) {
+  if (session.status === 'recording') recordingId = session.id;
+  else if (session.id === recordingId) recordingId = null;
+  window.murmel.setSessionPower?.(recordingId !== null);
+}
+
+async function syncRecordingAfterReconnect() {
+  if (!state.account) return;
+  try {
+    const sessions = await call('session_list', { limit: 5 });
+    recordingId = sessions.find((s) => s.status === 'recording')?.id ?? null;
+    window.murmel.setSessionPower?.(recordingId !== null);
+  } catch { /* the next status message corrects it */ }
+}
+
 function boot() {
   wireChrome();
   on('state', (msg) => {
@@ -224,7 +242,7 @@ function boot() {
     renderOnboarding();
   });
   on('session_status', (msg) => {
-    window.murmel.setSessionPower?.(msg.session.status === 'recording');
+    trackRecording(msg.session);
     Object.values(PAGES).forEach((p) => p.onSessionStatus?.(msg.session, ctx));
   });
   ['session_levels', 'session_warning', 'session_finishing', 'session_progress'].forEach((type) => {
@@ -238,9 +256,10 @@ function boot() {
     state.account = msg.account;
   });
   on('connection', async (up) => {
-    if (!up) { window.murmel.setSessionPower?.(false); state.engine = { state: 'loading', detail: 'Engine nicht verbunden' }; renderStatus(); return; }
+    if (!up) { state.engine = { state: 'loading', detail: 'Engine nicht verbunden' }; renderStatus(); return; }
     state.settings = null;
     try { await checkAuth(); } catch (err) { toast(err.message, true); }
+    syncRecordingAfterReconnect();
   });
 }
 

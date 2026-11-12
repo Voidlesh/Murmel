@@ -30,10 +30,11 @@ SESSION_KEEP_AUDIO = 50  # session recordings kept on disk, counted separately f
 
 
 SESSION_SOURCES = ("both", "desktop", "mic")
-DEVICE_CHECK_S = 5.0  # how often the default playback device is compared with the recorded one
+DEVICE_CHECK_S = 8.0  # how often the default playback device is compared with the recorded one
 DESKTOP_SILENT_WARN_S = 20.0  # desktop audio this long without sound gets a visible warning
 SILENT_DB = -55.0  # quieter than this counts as no sound for the warning
 SESSION_LEVEL_INTERVAL_S = 0.15
+MAX_TICK_FAILURES = 30  # this many failed ticks in a row (about half a minute) end the session
 
 
 @dataclass
@@ -70,6 +71,7 @@ class _LiveSession:
         self.device_checked = time.monotonic()
         self.desktop_loud_at = time.monotonic()
         self.silence_warned = False
+        self.transcribe_failed = False
 
     def enqueue(self, speaker: str, segment: Segment) -> None:
         self.queued_s += segment.end_s - segment.start_s
@@ -532,13 +534,23 @@ class Engine:
         store = self._require_store()
         worker = asyncio.create_task(self._session_worker(live))
         status = "done"
+        failures = 0
         try:
             while self._session_running:
                 await asyncio.sleep(SESSION_TICK_S)
-                self._session_capture(live, final=False)
-                await self._session_watchdog(live)
-                for stream in live.streams:
-                    self._session_preview_soon(live, stream)
+                try:
+                    self._session_capture(live, final=False)
+                    await self._session_watchdog(live)
+                    for stream in live.streams:
+                        self._session_preview_soon(live, stream)
+                    failures = 0
+                except Exception as exc:  # noqa: BLE001 - one bad tick must not end a lecture
+                    failures += 1
+                    log.exception("Fehler in der Sitzungsschleife (%d in Folge)", failures)
+                    if failures == 1:
+                        await self._session_warn(live, "loop_error", f"Kurzer Aufnahmefehler: {exc}. Die Aufnahme läuft weiter.")
+                    if failures >= MAX_TICK_FAILURES:
+                        raise
             self._session_capture(live, final=True)
         except Exception:  # noqa: BLE001 - keep the engine alive, keep what was recorded
             log.exception("Sitzung fehlgeschlagen")
@@ -581,12 +593,32 @@ class Engine:
         live.write_mix(drained, final)
 
     async def _session_worker(self, live: "_LiveSession") -> None:
+        """Transcribes the queued segments one by one. A failing segment is skipped, the next ones still run;
+        the audio is kept, so 'Transkript neu erzeugen' can fill the gap later."""
         while (item := await live.queue.get()) is not None:
             speaker, segment = item
             try:
                 await self._session_save(live, speaker, segment)
+                if live.transcribe_failed:
+                    live.transcribe_failed = False
+                    await self._session_clear(live, "transcribe_error")
+            except Exception as exc:  # noqa: BLE001 - keep transcribing the rest of the lecture
+                log.exception("Abschnitt %.0f-%.0f s nicht transkribiert", segment.start_s, segment.end_s)
+                if not live.transcribe_failed:
+                    live.transcribe_failed = True
+                    await self._session_warn(
+                        live, "transcribe_error",
+                        f"Ein Abschnitt konnte nicht transkribiert werden ({exc}). Das Audio ist gespeichert, "
+                        "nach der Aufnahme hilft „Transkript neu erzeugen“.",
+                    )
             finally:
                 live.queued_s = max(0.0, live.queued_s - (segment.end_s - segment.start_s))
+
+    async def _session_warn(self, live: "_LiveSession", kind: str, text: str) -> None:
+        await self.broadcast({"type": "session_warning", "session_id": live.id, "kind": kind, "text": text})
+
+    async def _session_clear(self, live: "_LiveSession", kind: str) -> None:
+        await self.broadcast({"type": "session_warning", "session_id": live.id, "kind": "clear", "clears": kind})
 
     def _session_preview_soon(self, live: "_LiveSession", stream: "_SessionStream") -> None:
         """Provisional text for the speech that is not cut yet; runs in the background and never overlaps itself."""
@@ -653,12 +685,14 @@ class Engine:
             log.warning("%s: Neuverbindung fehlgeschlagen: %s", label, exc)
             if not stream.reconnect_failed:
                 stream.reconnect_failed = True
-                await self.broadcast({
-                    "type": "session_warning", "session_id": live.id, "kind": "stream_lost", "speaker": stream.speaker,
-                    "text": f"{label} ist ausgefallen ({reason}). Murmel versucht weiter, es neu zu verbinden.",
-                })
+                await self._session_warn(
+                    live, f"stream_lost_{stream.speaker}",
+                    f"{label} ist ausgefallen ({reason}). Murmel versucht weiter, es neu zu verbinden.",
+                )
             return
-        stream.reconnect_failed = False
+        if stream.reconnect_failed:
+            stream.reconnect_failed = False
+            await self._session_clear(live, f"stream_lost_{stream.speaker}")
         device = getattr(stream.recorder, "device_name", "")
         text = f"{label} neu verbunden ({reason})" + (f": {device}" if device else "")
         log.info(text)
@@ -679,13 +713,14 @@ class Engine:
         if silent_for >= DESKTOP_SILENT_WARN_S and not live.silence_warned:
             live.silence_warned = True
             device = getattr(stream.recorder, "device_name", "") or "unbekannt"
-            await self.broadcast({
-                "type": "session_warning", "session_id": live.id, "kind": "desktop_silent",
-                "text": f"Desktop-Audio seit {int(silent_for)} s stumm. Aufgenommen wird: {device}",
-            })
+            await self._session_warn(
+                live, "desktop_silent",
+                f"Desktop-Audio seit {int(silent_for)} s stumm. Aufgenommen wird: {device}. "
+                "Läuft der Ton über ein anderes Gerät, dieses in Windows als Standard-Ausgabe wählen.",
+            )
         elif silent_for < DESKTOP_SILENT_WARN_S and live.silence_warned:
             live.silence_warned = False
-            await self.broadcast({"type": "session_warning", "session_id": live.id, "kind": "clear"})
+            await self._session_clear(live, "desktop_silent")
 
     async def _session_level_loop(self, live: "_LiveSession") -> None:
         scalers = {s.speaker: audio.LevelScaler() for s in live.streams}

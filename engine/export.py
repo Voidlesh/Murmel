@@ -60,13 +60,12 @@ def to_markdown(session: dict[str, Any], segments: list[dict[str, Any]]) -> str:
     if session.get("terms"):
         lines += [f"**Fachbegriffe:** {session['terms']}", ""]
     lines += ["## Transkript", ""]
-    named = len(_speakers(paras)) > 1
     for p in paras:
         if p["speaker"] == "system":
             lines += [f"> *[{clock(p['start_s'])}] {p['text']}*", ""]
             continue
-        label = f"**{SPEAKER.get(p['speaker'], p['speaker'])}** " if named else ""
-        lines += [f"{label}`[{clock(p['start_s'])}]` {p['text']}", ""]
+        label = f"**{SPEAKER.get(p['speaker'], p['speaker'])}**"
+        lines += [f"{label} `[{clock(p['start_s'])}]` {p['text']}", ""]
     notes = (session.get("notes") or "").strip()
     if notes:
         lines += ["## Notizen", "", notes, ""]

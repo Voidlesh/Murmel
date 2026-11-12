@@ -34,7 +34,10 @@ _HALLUCINATION_ALONE = re.compile(
     r"|musik|music|applaus|applause|\.\.\.)\W*$",
     re.IGNORECASE,
 )
-_REPEAT_RE = re.compile(r"\b((?:[\w'äöüÄÖÜß-]+[\s,]+){0,7}?[\w'äöüÄÖÜß-]+)(?:[\s,.!?]+\1\b){2,}", re.IGNORECASE)
+# A phrase said 5+ times in a row is a Whisper loop. Single short tokens and numbers are left alone:
+# "der Vektor 1, 1, 1" or "null, null, null" is real lecture content.
+_REPEAT_RE = re.compile(r"\b((?:[\w'äöüÄÖÜß-]+[\s,]+){0,7}?[\w'äöüÄÖÜß-]+)(?:[\s,.!?]+\1\b){4,}", re.IGNORECASE)
+REPEAT_MIN_CHARS = 6  # a repeated phrase shorter than this ("ja", "1", "null") is never collapsed
 
 MAX_LEARN_SPAN = 3
 
@@ -63,11 +66,19 @@ def remove_fillers(text: str) -> str:
 def strip_hallucinations(text: str) -> str:
     """Drop typical Whisper inventions and collapse loops ("und dann und dann und dann ...")."""
     cleaned = _HALLUCINATION_ANYWHERE.sub(" ", text)
-    cleaned = _REPEAT_RE.sub(r"\1", cleaned)
+    cleaned = _REPEAT_RE.sub(_collapse_loop, cleaned)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     if _HALLUCINATION_ALONE.match(cleaned):
         return ""
     return cleaned
+
+
+def _collapse_loop(match: re.Match) -> str:
+    phrase = match.group(1)
+    letters = re.sub(r"[^A-Za-zÄÖÜäöüß]", "", phrase)
+    if len(phrase) < REPEAT_MIN_CHARS or len(letters) < REPEAT_MIN_CHARS - 2:
+        return match.group(0)
+    return phrase
 
 
 def apply_voice_commands(text: str) -> str:

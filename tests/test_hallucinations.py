@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from engine import textproc
 from engine.stt import is_unreliable
 
@@ -20,8 +22,19 @@ def test_closing_phrase_inside_real_speech_stays():
 
 
 def test_repetition_loop_is_collapsed():
-    looped = "und dann und dann und dann und dann gehen wir weiter"
+    looped = "und dann und dann und dann und dann und dann und dann gehen wir weiter"
     assert textproc.strip_hallucinations(looped) == "und dann gehen wir weiter"
+
+
+@pytest.mark.parametrize("text", [
+    "Der Vektor 1, 1, 1 ist ein Eigenvektor.",
+    "Die Zeile 0, 0, 0, 0, 0, 0 fällt weg.",
+    "Das ist gleich null, null, null.",
+    "Nein, nein, nein, nein, nein, so nicht.",
+    "Und dann und dann und dann kam der Beweis.",
+])
+def test_real_lecture_repetitions_stay(text):
+    assert textproc.strip_hallucinations(text) == text
 
 
 def test_normal_repetition_of_two_is_kept():
