@@ -370,11 +370,15 @@ function openStartDialog() {
         <select class="input" name="language">${LANGUAGES.map(([k, l]) => `<option value="${k}" ${k === lang ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       <label class="field"><span>Fachbegriffe <small>(optional, mit Komma getrennt)</small></span>
         <textarea class="textarea" name="terms" rows="2" placeholder="Eigenwert, Diagonalisierung, Jordan-Normalform"></textarea></label>
-      ${/CPU/.test(ctx.engine?.detail || '') ? '<p class="live-warning" role="alert"><span class="ic i-triangle-alert"></span>Murmel läuft gerade auf der CPU statt der Grafikkarte. Das Transkript wird ungenauer und kann hinterherhinken.</p>' : ''}
+      <div id="start-stt"></div>
       <p class="hint-text">Tipp: Starte die Sitzung erst, wenn Kopfhörer verbunden sind und der Ton der Vorlesung läuft.</p>
       <div class="modal-actions"><button type="button" class="btn btn-ghost" data-close>Abbrechen</button>
         <button type="submit" class="btn btn-light" id="start-ok"><span class="ic i-mic"></span>Aufnahme starten</button></div>
     </form>`);
+  ctx.call('stt_info').then((stt) => {
+    if (!stt?.fallback) return;
+    el.querySelector('#start-stt').innerHTML = '<p class="live-warning" role="alert"><span class="ic i-triangle-alert"></span>Die Grafikkarte ist nicht nutzbar, Murmel nutzt das kleine CPU-Modell. Das Transkript wird ungenauer und kann hinterherhinken.</p>';
+  }).catch(() => {});
   el.querySelector('#start-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = new FormData(e.target);

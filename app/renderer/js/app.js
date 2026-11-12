@@ -222,7 +222,7 @@ function trackRecording(session) {
 }
 
 async function syncRecordingAfterReconnect() {
-  if (!state.account) return;
+  if (!state.account) { recordingId = null; window.murmel.setSessionPower?.(false); return; }
   try {
     const sessions = await call('session_list', { limit: 5 });
     recordingId = sessions.find((s) => s.status === 'recording')?.id ?? null;
