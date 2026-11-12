@@ -185,7 +185,7 @@ def test_changed_playback_device_triggers_reconnect(engine, monkeypatch):
 
     async def scenario():
         await engine.api_session_start(source="desktop")
-        await asyncio.sleep(server.SESSION_TICK_S * 1.5)
+        await asyncio.sleep(server.SESSION_TICK_S * 2.5)  # one tick asks in the background, the next reacts
         await engine.api_session_stop()
 
     asyncio.run(scenario())
@@ -424,7 +424,9 @@ def test_a_failing_tick_does_not_end_the_recording(engine, monkeypatch):
 
     session, finished = run_session(engine, feed, ticks=3, source="desktop")
     assert finished["status"] == "done"
-    assert any(m.get("kind") == "loop_error" for m in sent if m["type"] == "session_warning")
+    warnings = [m for m in sent if m["type"] == "session_warning"]
+    assert any(m.get("kind") == "loop_error" for m in warnings)
+    assert any(m.get("clears") == "loop_error" for m in warnings)  # cleared once ticks work again
 
 
 def test_reconnect_clears_its_own_warning_only(engine):
@@ -473,3 +475,26 @@ def test_markdown_always_names_the_speaker():
     session = {"title": "VL", "started_at": 0, "ended_at": 10, "source": "desktop"}
     md = export.to_markdown(session, [{"speaker": "them", "start_s": 0.0, "end_s": 5.0, "text": "Hallo."}])
     assert "**Gegenüber** `[00:00]` Hallo." in md
+
+
+def test_slow_device_query_does_not_block_the_tick(engine, monkeypatch):
+    monkeypatch.setattr(server, "DEVICE_CHECK_S", 0.0)
+
+    def slow():
+        time.sleep(3)
+        return "Fake"
+
+    monkeypatch.setattr(server.audio, "default_loopback_name", slow)
+
+    async def scenario():
+        session = await engine.api_session_start(source="desktop")
+        engine._system_recorder.pending = np.concatenate([tone(6), silence(1.0), tone(3)])
+        started = time.monotonic()
+        await asyncio.sleep(server.SESSION_TICK_S * 2)
+        finished = await engine.api_session_stop()
+        return session, finished, time.monotonic() - started
+
+    session, finished, took = asyncio.run(scenario())
+    assert finished["status"] == "done"
+    assert len(engine.store.session_segments(session["id"])) == 2
+    assert took < 2.9  # the session did not wait for the slow child process

@@ -72,6 +72,8 @@ class _LiveSession:
         self.desktop_loud_at = time.monotonic()
         self.silence_warned = False
         self.transcribe_failed = False
+        self.device_task: asyncio.Task | None = None
+        self.device_seen = ""  # answer of the last background device query, read by the next tick
 
     def enqueue(self, speaker: str, segment: Segment) -> None:
         self.queued_s += segment.end_s - segment.start_s
@@ -543,7 +545,9 @@ class Engine:
                     await self._session_watchdog(live)
                     for stream in live.streams:
                         self._session_preview_soon(live, stream)
-                    failures = 0
+                    if failures:
+                        failures = 0
+                        await self._session_clear(live, "loop_error")
                 except Exception as exc:  # noqa: BLE001 - one bad tick must not end a lecture
                     failures += 1
                     log.exception("Fehler in der Sitzungsschleife (%d in Folge)", failures)
@@ -571,6 +575,8 @@ class Engine:
             status = "interrupted"
         if self._session_levels_task:
             self._session_levels_task.cancel()
+        if live.device_task and not live.device_task.done():
+            live.device_task.cancel()
         store.set_session_status(live.id, status)
         self.session_id = None
         self._live = None
@@ -666,16 +672,28 @@ class Engine:
             if not healthy:
                 await self._session_reconnect(live, stream, "Stream unterbrochen")
                 continue
-            if stream.speaker == "them" and now - live.device_checked >= DEVICE_CHECK_S:
-                live.device_checked = now
-                try:
-                    current = await asyncio.to_thread(audio.default_loopback_name)
-                except Exception:  # noqa: BLE001 - no playback device at the moment
-                    current = ""
-                recorded = getattr(stream.recorder, "device_name", "")
-                if current and recorded and current != recorded:
-                    await self._session_reconnect(live, stream, f"Wiedergabegerät gewechselt zu {current}")
+            if stream.speaker == "them":
+                await self._session_device_check(live, stream, now)
         await self._session_silence_check(live, now)
+
+    async def _session_device_check(self, live: "_LiveSession", stream: "_SessionStream", now: float) -> None:
+        """Compare the recorded playback device with the current Windows default. The question runs in a
+        child process that takes a moment, so it runs in the background and the tick only reads the answer."""
+        current, live.device_seen = live.device_seen, ""
+        recorded = getattr(stream.recorder, "device_name", "")
+        if current and recorded and current != recorded:
+            await self._session_reconnect(live, stream, f"Wiedergabegerät gewechselt zu {current}")
+        busy = live.device_task is not None and not live.device_task.done()
+        if not busy and now - live.device_checked >= DEVICE_CHECK_S:
+            live.device_checked = now
+            live.device_task = asyncio.create_task(self._session_query_device(live))
+
+    @staticmethod
+    async def _session_query_device(live: "_LiveSession") -> None:
+        try:
+            live.device_seen = await asyncio.to_thread(audio.default_loopback_name)
+        except Exception:  # noqa: BLE001 - no playback device at the moment
+            live.device_seen = ""
 
     async def _session_reconnect(self, live: "_LiveSession", stream: "_SessionStream", reason: str) -> None:
         label = "Desktop-Audio" if stream.speaker == "them" else "Mikrofon"
@@ -744,6 +762,9 @@ class Engine:
             return {"model": "", "device": "", "fallback": False}
         fallback = t.device == "cpu" and self.settings.get("device") in ("auto", "cuda")
         return {"model": t.model_name, "device": t.device, "fallback": fallback}
+
+    async def api_stt_info(self) -> dict[str, Any]:
+        return self._stt_info()
 
     def _session_payload(self, session_id: int) -> dict[str, Any]:
         store = self._require_store()

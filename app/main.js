@@ -25,6 +25,10 @@ let mainWindow = null;
 let overlayWindow = null;
 let tray = null;
 let engineProc = null;
+let engineRestarts = [];
+const ENGINE_RESTART_DELAY_MS = 2000;
+const ENGINE_RESTART_WINDOW_MS = 10 * 60 * 1000;
+const ENGINE_MAX_RESTARTS = 3; // more crashes in ten minutes means something is broken for good
 let quitting = false;
 let dock = 'bottom';
 
@@ -67,7 +71,16 @@ async function startEngine() {
   engineProc = spawn(command, args, { cwd, windowsHide: true, stdio: 'ignore' });
   engineProc.on('exit', (code) => {
     engineProc = null;
-    if (!quitting) console.error('Engine beendet mit Code', code);
+    setSessionPowerBlock(false); // a dead engine records nothing, so Windows may sleep again
+    if (quitting) return;
+    console.error('Engine beendet mit Code', code);
+    // bring the engine back so the app keeps working; a cut-off session shows up as "Unterbrochen"
+    const now = Date.now();
+    engineRestarts = engineRestarts.filter((t) => now - t < ENGINE_RESTART_WINDOW_MS);
+    if (engineRestarts.length < ENGINE_MAX_RESTARTS) {
+      engineRestarts.push(now);
+      setTimeout(() => { if (!quitting) startEngine(); }, ENGINE_RESTART_DELAY_MS);
+    }
   });
 }
 

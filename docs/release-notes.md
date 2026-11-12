@@ -1,4 +1,12 @@
-## Murmel 1.1.0: Notizen für Vorlesungen und Calls
+## Murmel 1.1.1
+
+### Korrekturen gegenüber 1.1.0
+- Stürzt die Engine ab, startet Murmel sie automatisch neu, und der PC darf wieder in den Standby.
+- Die Prüfung auf ein neues Wiedergabegerät läuft im Hintergrund und bremst die Aufnahme nicht mehr.
+- Die Warnung nach einem kurzen Aufnahmefehler verschwindet wieder, sobald alles läuft.
+- Die Warnung zum CPU-Modell im Startdialog erscheint zuverlässig und nur, wenn die Grafikkarte wirklich nicht nutzbar ist.
+
+## Neu seit 1.1.0: Notizen für Vorlesungen und Calls
 
 Die Notizen-Aufnahme ist jetzt für lange Online-Vorlesungen gebaut: zuverlässig, mit sauberem Transkript und Export.
 
@@ -24,4 +32,4 @@ Die Notizen-Aufnahme ist jetzt für lange Online-Vorlesungen gebaut: zuverlässi
 Die KI-Zusammenfassung ist vorerst ausgeblendet.
 
 ### Installation
-`Murmel-Setup-1.1.0.exe` herunterladen und starten. Bestehende Accounts, Verläufe und Einstellungen bleiben erhalten. Der Installer ist nicht signiert: Windows-Warnung mit *Weitere Informationen → Trotzdem ausführen* bestätigen.
+`Murmel-Setup-1.1.1.exe` herunterladen und starten. Bestehende Accounts, Verläufe und Einstellungen bleiben erhalten. Der Installer ist nicht signiert: Windows-Warnung mit *Weitere Informationen → Trotzdem ausführen* bestätigen.
