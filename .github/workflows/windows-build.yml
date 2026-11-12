@@ -6,6 +6,14 @@ on:
   push:
     branches: [main, "update/**"]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Create a GitHub release with this tag (e.g. v1.1.0); leave empty to only build"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
 
 concurrency:
   group: windows-build-${{ github.ref }}
@@ -69,3 +77,14 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+
+      - name: GitHub release
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          name: Murmel ${{ inputs.release_tag }}
+          body_path: docs/release-notes.md
+          files: build/installer/Murmel-Setup-*.exe
+          make_latest: true
