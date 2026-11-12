@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, shell, clipboard } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, shell, clipboard, dialog, powerSaveBlocker } = require('electron');
 const { spawn } = require('child_process');
 const net = require('net');
 const path = require('path');
@@ -333,7 +333,46 @@ function showMain() {
   mainWindow.focus();
 }
 
+// a running session keeps Windows awake: an online lecture can run an hour without any input
+let powerBlockId = null;
+function setSessionPowerBlock(on) {
+  if (on && powerBlockId === null) powerBlockId = powerSaveBlocker.start('prevent-app-suspension');
+  if (!on && powerBlockId !== null) { powerSaveBlocker.stop(powerBlockId); powerBlockId = null; }
+  return powerBlockId !== null;
+}
+
+async function saveTextFile(_e, { defaultName, content, extension }) {
+  const filters = extension === 'md'
+    ? [{ name: 'Markdown', extensions: ['md'] }]
+    : [{ name: 'Text', extensions: ['txt'] }];
+  const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    title: 'Transkript speichern',
+    defaultPath: path.join(app.getPath('documents'), String(defaultName || `Transkript.${extension}`)),
+    filters,
+  });
+  if (canceled || !filePath) return null;
+  await fs.promises.writeFile(filePath, String(content), 'utf8');
+  return filePath;
+}
+
+async function pickAudioFile() {
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    title: 'Aufnahme importieren',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Audio und Video', extensions: ['wav', 'mp3', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'mkv', 'mp4', 'mov', 'webm'] },
+      { name: 'Alle Dateien', extensions: ['*'] },
+    ],
+  });
+  return canceled ? null : filePaths[0] || null;
+}
+
 function registerIpc() {
+  ipcMain.handle('session:power', (_e, on) => setSessionPowerBlock(Boolean(on)));
+  ipcMain.handle('file:save-text', saveTextFile);
+  ipcMain.handle('file:pick-audio', pickAudioFile);
+  ipcMain.handle('file:reveal', (_e, filePath) => shell.showItemInFolder(String(filePath)));
+  ipcMain.handle('clipboard:write', (_e, text) => clipboard.writeText(String(text)));
   ipcMain.on('window:minimize', () => mainWindow?.minimize());
   ipcMain.on('window:maximize', () => (mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow?.maximize()));
   ipcMain.on('window:close', () => mainWindow?.hide());

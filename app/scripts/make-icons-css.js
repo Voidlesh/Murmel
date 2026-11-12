@@ -11,6 +11,7 @@ const ICONS = [
   'info', 'circle-user-round', 'log-out', 'user-round', 'upload', 'arrow-up-down', 'refresh-cw', 'monitor',
   'bot', 'infinity', 'message-square', 'file-text', 'lock', 'chevron-left', 'chevron-right', 'quote',
   'share', 'eye', 'eye-off', 'key-round', 'sparkle', 'moon-star', 'hash', 'activity',
+  'loader-circle', 'file-down', 'triangle-alert',
 ];
 const src = path.join(__dirname, '..', 'node_modules', 'lucide-static', 'icons');
 const css = ICONS.map((name) => {

@@ -5,8 +5,8 @@ import { clearLivePreview, clock, livePreviewHtml, resetLivePreview, setLivePrev
 
 const SAVE_DELAY_MS = 800;
 const TICK_MS = 1000;
-const TABS = [['transcript', 'Transkript'], ['notes', 'Notizen'], ['summary', 'Zusammenfassung']];
-const STATUS_LABEL = { recording: 'Läuft', processing: 'Fasst zusammen …', done: 'Fertig', error: 'Fehler' };
+const TABS = [['transcript', 'Transkript'], ['notes', 'Notizen']]; // the summary is hidden for now
+const STATUS_LABEL = { recording: 'Läuft', processing: 'Wird verarbeitet …', done: 'Fertig', interrupted: 'Unterbrochen', error: 'Fehler' };
 
 let sessionId = Number(new URLSearchParams(location.search).get('session'));
 let detail = null;

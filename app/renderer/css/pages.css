@@ -185,6 +185,54 @@
 .task-list { display: grid; gap: 6px; padding-left: 18px; list-style: disc; }
 .notes-editor { width: 100%; min-height: 320px; font-family: var(--font-serif); font-size: 16px; line-height: 1.6; }
 .empty-action { text-align: center; margin-top: 12px; }
+/* lecture notetaker: header tags, export actions, live panel */
+.notes-head { flex-wrap: wrap; }
+.notes-head-main { min-width: 0; flex: 1 1 280px; display: grid; gap: 4px; }
+.notes-title[contenteditable='true'] { border-radius: var(--r-sm); outline: none; cursor: text; padding: 0 4px; margin: 0 -4px; }
+.notes-title[contenteditable='true']:hover { background: var(--hover); }
+.notes-title[contenteditable='true']:focus { background: var(--card-2); box-shadow: 0 0 0 1px var(--border-strong); }
+.notes-head-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: flex-end; }
+.btn-group { display: flex; gap: 4px; align-items: center; }
+.btn-sm { padding: 6px 10px; font-size: 12.5px; }
+.btn-stop { background: var(--red); color: #fff; border-color: transparent; }
+.btn-stop:hover { background: var(--red); opacity: 0.9; border-color: transparent; }
+.tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.tag { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px; font-size: 12px; color: var(--text-2); background: var(--card-2); border: 1px solid var(--border); max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tag-soft { color: var(--muted); }
+.tag-warn { color: var(--amber); border-color: rgba(255, 169, 70, 0.5); background: rgba(255, 169, 70, 0.1); }
+.badge.red { background: rgba(238, 106, 106, 0.16); color: var(--red); }
+.badge .live-dot, .live-clock .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--red); margin-right: 6px; animation: live-pulse 1.4s ease-in-out infinite; }
+@keyframes live-pulse { 50% { opacity: 0.35; } }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.live-panel { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--card-2); padding: 14px 16px; margin-bottom: 16px; display: grid; gap: 12px; }
+.live-panel.has-warning { border-color: rgba(255, 169, 70, 0.55); }
+.live-warning { display: flex; gap: 8px; align-items: center; color: var(--amber); font-size: 13.5px; font-weight: 600; }
+.live-warning .ic { width: 16px; height: 16px; }
+.live-row { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; }
+.live-clock { display: flex; align-items: center; font-size: 26px; font-variant-numeric: tabular-nums; font-weight: 600; letter-spacing: 0.01em; min-width: 110px; }
+.meters { display: grid; gap: 8px; flex: 1 1 220px; }
+.meter { display: grid; grid-template-columns: 70px 1fr; gap: 10px; align-items: center; font-size: 12px; color: var(--text-2); }
+.meter-track { height: 6px; border-radius: 4px; background: var(--active); overflow: hidden; }
+.meter-track i { display: block; height: 100%; width: 0; border-radius: 4px; background: var(--teal-3); transition: width 140ms linear; }
+.meter.quiet .meter-label { color: var(--muted); }
+.live-lag { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.progress-line { display: grid; gap: 6px; margin-bottom: 14px; font-size: 13px; color: var(--text-2); }
+.progress-track { height: 5px; border-radius: 4px; background: var(--active); overflow: hidden; }
+.progress-track i { display: block; height: 100%; background: var(--violet-soft); border-radius: 4px; transition: width 300ms var(--ease-out); }
+.turn-system { display: flex; gap: 8px; justify-content: center; margin: 6px 0; font-size: 12px; color: var(--amber); }
+.turn-system span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.start-form { display: grid; gap: 14px; }
+.modal:has(.start-form) { max-height: calc(100vh - 40px); overflow-y: auto; }
+.start-form fieldset { border: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.start-form legend, .start-form .field > span { font-size: 12.5px; font-weight: 600; color: var(--text-2); margin-bottom: 4px; }
+.start-form .field > span small { font-weight: 400; color: var(--muted); }
+.source-option { display: flex; gap: 10px; align-items: flex-start; padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--r-md); cursor: pointer; transition: border-color var(--fast), background var(--fast); }
+.source-option:hover { background: var(--hover); }
+.source-option:has(input:checked) { border-color: var(--teal-3); background: rgba(54, 148, 137, 0.08); }
+.source-option input { margin-top: 3px; accent-color: var(--teal-3); }
+.source-option span { display: grid; gap: 2px; }
+.source-option small { color: var(--muted); font-size: 12px; }
 @media (max-width: 760px) { .notes-layout { grid-template-columns: 1fr; } }
 
 /* ---- dictionary + snippets ------------------------------------------------ */

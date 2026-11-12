@@ -1,12 +1,14 @@
 // Transcript rendering shared by the notes page and the session window.
 import { escapeHtml } from './format.js';
 
-const SPEAKER_LABEL = { you: 'Du', them: 'Gegenüber' };
+const SPEAKER_LABEL = { you: 'Du', them: 'Gegenüber', system: 'Hinweis' };
 
 export function clock(seconds) {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${String(s).padStart(2, '0')}`;
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`;
 }
 
 /** Consecutive segments of one speaker form a turn, shown as one group of chat bubbles. */
@@ -20,6 +22,9 @@ export function turnsOf(segments) {
 }
 
 function turnHtml(turn) {
+  if (turn.speaker === 'system') {
+    return turn.segments.map((s) => `<p class="turn-system"><span>${clock(s.start_s)}</span>${escapeHtml(s.text)}</p>`).join('');
+  }
   const label = SPEAKER_LABEL[turn.speaker] ?? escapeHtml(turn.speaker);
   return `
     <div class="turn turn-${turn.speaker}">

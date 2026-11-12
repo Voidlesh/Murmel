@@ -22,4 +22,9 @@ contextBridge.exposeInMainWorld('murmel', {
   onNavigate: (cb) => ipcRenderer.on('app:navigate', (_e, page) => cb(page)),
   showIslandMenu: () => ipcRenderer.send('overlay:menu'),
   onOverlayAction: (cb) => ipcRenderer.on('overlay:action', (_e, name) => cb(name)),
+  setSessionPower: (on) => ipcRenderer.invoke('session:power', Boolean(on)),
+  saveTextFile: (defaultName, content, extension) => ipcRenderer.invoke('file:save-text', { defaultName, content, extension }),
+  pickAudioFile: () => ipcRenderer.invoke('file:pick-audio'),
+  revealFile: (filePath) => ipcRenderer.invoke('file:reveal', String(filePath)),
+  writeClipboard: (text) => ipcRenderer.invoke('clipboard:write', String(text)),
 });

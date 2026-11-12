@@ -2,6 +2,8 @@
 const URL = 'ws://127.0.0.1:47821';
 const RECONNECT_MS = 1000;
 const REQUEST_TIMEOUT_MS = 60000;
+// stopping a session waits until the last audio is transcribed, and an import decodes the whole file
+const SLOW_METHODS = { session_stop: 15 * 60000, session_import: 10 * 60000 };
 
 let ws = null;
 let nextId = 1;
@@ -52,7 +54,7 @@ export function call(method, params = {}) {
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error(`Zeitüberschreitung: ${method}`));
-    }, REQUEST_TIMEOUT_MS);
+    }, SLOW_METHODS[method] ?? REQUEST_TIMEOUT_MS);
     pending.set(id, { resolve, reject, timer });
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(msg);
     else queue.push(msg);

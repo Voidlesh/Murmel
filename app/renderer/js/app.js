@@ -55,7 +55,7 @@ function toast(text, isError = false) {
   el.className = `toast${isError ? ' error' : ''}`;
   el.textContent = text;
   document.getElementById('toasts').appendChild(el);
-  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 220); }, TOAST_MS);
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 220); }, isError ? TOAST_MS * 2.5 : TOAST_MS);
 }
 
 /** Opens a modal with trusted HTML; returns { el, close }. */
@@ -223,16 +223,22 @@ function boot() {
     Object.values(PAGES).forEach((p) => p.onTranscript?.(msg.item, ctx));
     renderOnboarding();
   });
-  on('session_status', (msg) => Object.values(PAGES).forEach((p) => p.onSessionStatus?.(msg.session, ctx)));
+  on('session_status', (msg) => {
+    window.murmel.setSessionPower?.(msg.session.status === 'recording');
+    Object.values(PAGES).forEach((p) => p.onSessionStatus?.(msg.session, ctx));
+  });
+  ['session_levels', 'session_warning', 'session_finishing', 'session_progress'].forEach((type) => {
+    on(type, (msg) => Object.values(PAGES).forEach((p) => p.onSessionEvent?.(msg, ctx)));
+  });
   on('session_segment', (msg) => Object.values(PAGES).forEach((p) => p.onSessionSegment?.(msg, ctx)));
   on('session_preview', (msg) => Object.values(PAGES).forEach((p) => p.onSessionPreview?.(msg, ctx)));
-  on('notice', (msg) => toast(msg.text));
+  on('notice', (msg) => toast(msg.text, Boolean(msg.warning)));
   on('account', (msg) => {
     if (!msg.account || msg.account.id !== state.account?.id) { checkAuth(); return; }
     state.account = msg.account;
   });
   on('connection', async (up) => {
-    if (!up) { state.engine = { state: 'loading', detail: 'Engine nicht verbunden' }; renderStatus(); return; }
+    if (!up) { window.murmel.setSessionPower?.(false); state.engine = { state: 'loading', detail: 'Engine nicht verbunden' }; renderStatus(); return; }
     state.settings = null;
     try { await checkAuth(); } catch (err) { toast(err.message, true); }
   });
