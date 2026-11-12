@@ -8,7 +8,23 @@ from logging.handlers import RotatingFileHandler
 from . import config
 
 
+def _write_default_loopback(target: str) -> None:
+    """Child-process mode for the session watchdog: write the current playback device to a file and exit."""
+    from pathlib import Path
+
+    from .audio import query_default_loopback_name
+
+    try:
+        name = query_default_loopback_name()
+    except Exception:  # noqa: BLE001 - no playback device right now
+        sys.exit(1)
+    Path(target).write_text(name, encoding="utf-8")
+    sys.exit(0)
+
+
 def main() -> None:
+    if len(sys.argv) >= 3 and sys.argv[1] == "--default-loopback":
+        _write_default_loopback(sys.argv[2])
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     handlers: list[logging.Handler] = [

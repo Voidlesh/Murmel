@@ -12,6 +12,7 @@ SEGMENT_MIN_S = 5.0  # no cut before this, so segments are not too short
 SEGMENT_MAX_S = 30.0  # hard cut if there is no pause
 PAUSE_MIN_S = 0.6  # a silence this long is a natural break
 BLOCK_S = 0.1  # resolution for finding pauses
+SOFT_CUT_WINDOW_S = 5.0  # without a pause, cut at the quietest moment of the last seconds before the maximum
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,11 @@ class Segmenter:
         while (cut := self._cut_index()) is not None:
             out.append(self._take(cut))
         return out
+
+    @property
+    def position_s(self) -> float:
+        """Time of the newest sample fed in, on the session timeline."""
+        return (self._offset + self._buffer.size) / self._rate
 
     def pending(self, max_samples: int) -> tuple[float, np.ndarray]:
         """The not yet cut tail of the audio, so a live preview only ever transcribes the newest part."""
@@ -64,10 +70,22 @@ class Segmenter:
             if run == pause_blocks:
                 return (index - run // 2 + 1) * block  # cut in the middle of the pause
         if self._buffer.size >= max_len:
-            return max_len
+            return self._soft_cut(silent_rms=self._block_rms(block), block=block, max_len=max_len)
         return None
 
-    def _silent_blocks(self, block: int) -> np.ndarray:
+    def _soft_cut(self, silent_rms: np.ndarray, block: int, max_len: int) -> int:
+        """No pause long enough: cut where it is quietest shortly before the limit, so no word is split."""
+        last = max_len // block
+        first = max(int(SEGMENT_MIN_S * self._rate) // block, last - int(SOFT_CUT_WINDOW_S / BLOCK_S))
+        window = silent_rms[first:last]
+        if not window.size:
+            return max_len
+        return (first + int(np.argmin(window))) * block + block // 2
+
+    def _block_rms(self, block: int) -> np.ndarray:
         count = self._buffer.size // block
         frames = self._buffer[: count * block].reshape(count, block)
-        return np.sqrt(np.mean(frames**2, axis=1)) < SILENCE_RMS
+        return np.sqrt(np.mean(frames**2, axis=1))
+
+    def _silent_blocks(self, block: int) -> np.ndarray:
+        return self._block_rms(block) < SILENCE_RMS

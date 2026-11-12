@@ -55,7 +55,7 @@ function toast(text, isError = false) {
   el.className = `toast${isError ? ' error' : ''}`;
   el.textContent = text;
   document.getElementById('toasts').appendChild(el);
-  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 220); }, TOAST_MS);
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 220); }, isError ? TOAST_MS * 2.5 : TOAST_MS);
 }
 
 /** Opens a modal with trusted HTML; returns { el, close }. */
@@ -212,6 +212,24 @@ function wireChrome() {
   if (readPref(SIDEBAR_KEY, '0') === '1') document.body.classList.add('sidebar-collapsed');
 }
 
+// ---- keep Windows awake while a session records ----------------------------------
+// Only the running session decides; status updates of other sessions (rename, re-run) must not release it.
+let recordingId = null;
+function trackRecording(session) {
+  if (session.status === 'recording') recordingId = session.id;
+  else if (session.id === recordingId) recordingId = null;
+  window.murmel.setSessionPower?.(recordingId !== null);
+}
+
+async function syncRecordingAfterReconnect() {
+  if (!state.account) return;
+  try {
+    const sessions = await call('session_list', { limit: 5 });
+    recordingId = sessions.find((s) => s.status === 'recording')?.id ?? null;
+    window.murmel.setSessionPower?.(recordingId !== null);
+  } catch { /* the next status message corrects it */ }
+}
+
 function boot() {
   wireChrome();
   on('state', (msg) => {
@@ -223,10 +241,16 @@ function boot() {
     Object.values(PAGES).forEach((p) => p.onTranscript?.(msg.item, ctx));
     renderOnboarding();
   });
-  on('session_status', (msg) => Object.values(PAGES).forEach((p) => p.onSessionStatus?.(msg.session, ctx)));
+  on('session_status', (msg) => {
+    trackRecording(msg.session);
+    Object.values(PAGES).forEach((p) => p.onSessionStatus?.(msg.session, ctx));
+  });
+  ['session_levels', 'session_warning', 'session_finishing', 'session_progress'].forEach((type) => {
+    on(type, (msg) => Object.values(PAGES).forEach((p) => p.onSessionEvent?.(msg, ctx)));
+  });
   on('session_segment', (msg) => Object.values(PAGES).forEach((p) => p.onSessionSegment?.(msg, ctx)));
   on('session_preview', (msg) => Object.values(PAGES).forEach((p) => p.onSessionPreview?.(msg, ctx)));
-  on('notice', (msg) => toast(msg.text));
+  on('notice', (msg) => toast(msg.text, Boolean(msg.warning)));
   on('account', (msg) => {
     if (!msg.account || msg.account.id !== state.account?.id) { checkAuth(); return; }
     state.account = msg.account;
@@ -235,6 +259,7 @@ function boot() {
     if (!up) { state.engine = { state: 'loading', detail: 'Engine nicht verbunden' }; renderStatus(); return; }
     state.settings = null;
     try { await checkAuth(); } catch (err) { toast(err.message, true); }
+    syncRecordingAfterReconnect();
   });
 }
 

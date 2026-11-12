@@ -1,0 +1,90 @@
+# Builds the Windows installer: tests, PyInstaller engine bundle (with CUDA DLLs), Electron NSIS installer.
+# The installer is attached to the run as the artifact "Murmel-Setup".
+name: Windows build
+
+on:
+  push:
+    branches: [main, "update/**"]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Create a GitHub release with this tag (e.g. v1.1.0); leave empty to only build"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Python venv and dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install --upgrade pip
+          .venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller pytest
+
+      - name: Tests
+        shell: pwsh
+        run: .venv\Scripts\python.exe -m pytest tests -q
+
+      - name: Engine bundle
+        shell: pwsh
+        run: ./packaging/build-engine.ps1
+
+      - name: Check CUDA DLLs in the bundle
+        shell: pwsh
+        run: |
+          $root = "build/engine-dist/murmel-engine"
+          foreach ($pattern in @("cublas64_*.dll", "cudnn64_*.dll", "nvrtc64_*.dll")) {
+            $hit = Get-ChildItem -Path $root -Recurse -Filter $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $hit) { throw "Missing $pattern in the engine bundle, the installer would fall back to CPU" }
+            Write-Output "found $($hit.FullName)"
+          }
+
+      - name: Electron installer
+        working-directory: app
+        shell: pwsh
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          npm ci
+          npx electron-builder --win --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Murmel-Setup
+          path: build/installer/Murmel-Setup-*.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: GitHub release
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          name: Murmel ${{ inputs.release_tag }}
+          body_path: docs/release-notes.md
+          files: build/installer/Murmel-Setup-*.exe
+          make_latest: true

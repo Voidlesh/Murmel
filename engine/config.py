@@ -32,6 +32,7 @@ DEFAULTS: dict[str, Any] = {
     "session_hotkey": "",
     "session_keep_audio": True,
     "session_system_audio": True,  # the other side of a call, via WASAPI loopback
+    "session_source": "both",  # both | desktop | mic: what a new session records by default
     "session_live_preview": False,  # provisional text while someone is still speaking (uses more compute)
     "remove_fillers": True,
     "voice_commands": True,

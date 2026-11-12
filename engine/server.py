@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +15,7 @@ import numpy as np
 import websockets
 from websockets.asyncio.server import ServerConnection
 
-from . import audio, config, ducking, insights, llm, output, pipeline, style, textproc
+from . import audio, config, ducking, export, insights, llm, output, pipeline, style, textproc
 from .accounts import AccountStore, AuthError
 from .hotkey import HotkeyController, validate_hotkey
 from .sessions import Segment, Segmenter
@@ -28,12 +29,128 @@ KEEP_AUDIO_FILES = 200
 SESSION_KEEP_AUDIO = 50  # session recordings kept on disk, counted separately from dictations
 
 
+SESSION_SOURCES = ("both", "desktop", "mic")
+DEVICE_CHECK_S = 8.0  # how often the default playback device is compared with the recorded one
+DESKTOP_SILENT_WARN_S = 20.0  # desktop audio this long without sound gets a visible warning
+SILENT_DB = -55.0  # quieter than this counts as no sound for the warning
+SESSION_LEVEL_INTERVAL_S = 0.15
+MAX_TICK_FAILURES = 30  # this many failed ticks in a row (about half a minute) end the session
+
+
 @dataclass
 class _SessionStream:
     speaker: str  # "you" (microphone) or "them" (system audio)
     recorder: audio.Recorder
     segmenter: Segmenter
     last_preview: float = 0.0  # monotonic time of the last live preview for this stream
+    preview_task: asyncio.Task | None = None
+    reconnect_failed: bool = False
+
+
+@dataclass
+class _JobContext:
+    language: str
+    terms: list[str]
+
+
+class _LiveSession:
+    """Everything that belongs to the running session: streams, audio files, the transcription queue."""
+
+    def __init__(self, session_id: int, source: str, language: str, terms: list[str]) -> None:
+        self.id = session_id
+        self.source = source
+        self.language = language
+        self.terms = terms
+        self.started = time.time()
+        self.streams: list[_SessionStream] = []
+        self.mix: audio.WavWriter | None = None
+        self.tracks: dict[str, audio.WavWriter] = {}
+        self._mix_pending: dict[str, np.ndarray] = {}
+        self.queue: asyncio.Queue = asyncio.Queue()
+        self.queued_s = 0.0  # audio waiting for transcription, shown as lag
+        self.device_checked = time.monotonic()
+        self.desktop_loud_at = time.monotonic()
+        self.silence_warned = False
+        self.transcribe_failed = False
+
+    def enqueue(self, speaker: str, segment: Segment) -> None:
+        self.queued_s += segment.end_s - segment.start_s
+        self.queue.put_nowait((speaker, segment))
+
+    def write_mix(self, drained: dict[str, np.ndarray], final: bool) -> None:
+        """Sum the sources sample by sample; what one source has ahead waits for the other."""
+        if not self.mix:
+            return
+        for speaker, samples in drained.items():
+            self._mix_pending[speaker] = np.concatenate([self._mix_pending.get(speaker, np.zeros(0, np.float32)), samples])
+        pending = list(self._mix_pending.values())
+        if not pending:
+            return
+        size = max(p.size for p in pending) if final else min(p.size for p in pending)
+        if not size:
+            return
+        mixed = np.zeros(size, dtype=np.float32)
+        for speaker, samples in self._mix_pending.items():
+            part = samples[:size]
+            mixed[: part.size] += part
+            self._mix_pending[speaker] = samples[size:]
+        self.mix.write(np.clip(mixed, -1.0, 1.0))
+
+    def close_audio(self) -> None:
+        for writer in [self.mix, *self.tracks.values()]:
+            if writer:
+                with contextlib.suppress(Exception):
+                    writer.close()
+
+
+def _track_path(main: Path, speaker: str) -> Path:
+    return main.with_name(f"{main.stem}-{'desktop' if speaker == 'them' else 'mic'}.wav")
+
+
+def _audio_family(main: Path) -> list[Path]:
+    return [main, _track_path(main, "them"), _track_path(main, "you")]
+
+
+def _session_files(session: dict[str, Any]) -> dict[str, Path]:
+    if not session.get("audio_path"):
+        return {}
+    main = Path(session["audio_path"])
+    return {"mix": main, "desktop": _track_path(main, "them"), "mic": _track_path(main, "you")}
+
+
+def _retranscribe_tracks(session: dict[str, Any]) -> list[tuple[str, Path]]:
+    """Which file belongs to which speaker. Older sessions only kept the microphone, in the main file."""
+    files = _session_files(session)
+    if not files:
+        return []
+    tracks = [(speaker, files[key]) for speaker, key in (("them", "desktop"), ("you", "mic")) if files[key].exists()]
+    if tracks:
+        return tracks
+    if not files["mix"].exists():
+        return []
+    speaker = {"": "you", "mic": "you"}.get(session.get("source") or "", "them")
+    return [(speaker, files["mix"])]
+
+
+def _wav_seconds(path: Path) -> float:
+    import wave
+
+    with wave.open(str(path), "rb") as wav:
+        return wav.getnframes() / float(wav.getframerate() or 1)
+
+
+def _convert_to_wav(source: Path, target: Path) -> float:
+    """Any audio or video file to 16 kHz mono WAV (PyAV via faster-whisper). Returns the duration in seconds."""
+    from faster_whisper.audio import decode_audio
+
+    samples = decode_audio(str(source), sampling_rate=audio.SAMPLE_RATE)
+    writer = audio.WavWriter(target)
+    try:
+        for i in range(0, samples.size, audio.SAMPLE_RATE * 30):
+            writer.write(samples[i:i + audio.SAMPLE_RATE * 30])
+    finally:
+        writer.close()
+    return samples.size / audio.SAMPLE_RATE
 SESSION_TICK_S = 1.0  # how often the live audio is taken from the recorder
 PREVIEW_INTERVAL_S = 0.5  # pause between live previews, one pass on the GPU takes about 0.7 s with the large model
 PREVIEW_WINDOW_S = 10.0  # a preview only transcribes the newest seconds, so it stays cheap
@@ -79,7 +196,9 @@ class Engine:
         self._dictation_preview: asyncio.Task | None = None
         self._session_running = False
         self._session_task: asyncio.Task | None = None
-        self._session_wav: audio.WavWriter | None = None
+        self._session_levels_task: asyncio.Task | None = None
+        self._live: _LiveSession | None = None
+        self._jobs: dict[int, asyncio.Task] = {}  # background re-runs and imports by session id
 
     # --- lifecycle ---------------------------------------------------------
     async def run(self) -> None:
@@ -111,6 +230,7 @@ class Engine:
             self.settings = {**self.settings, "user_name": account.name}
         self.store = Store(self.account_dir / "murmel.db")
         self.store.mark_interrupted_sessions()
+        self._repair_session_audio()
         log.info("Account aktiv: %s", account.name)
 
     def _deactivate(self) -> None:
@@ -150,6 +270,12 @@ class Engine:
             await self._set_state("error", f"Modell-Fehler: {exc}")
             return
         await self._set_state("idle", f"{self.transcriber.model_name} · {self.transcriber.device.upper()}")
+        if self._stt_info()["fallback"]:
+            await self.broadcast({
+                "type": "notice", "warning": True,
+                "text": "Achtung: Die Grafikkarte ist nicht nutzbar. Murmel nutzt das kleine CPU-Modell, "
+                        "Transkripte werden ungenauer. NVIDIA-Treiber prüfen.",
+            })
 
     def _threadsafe(self, coro_fn: Callable[[], Awaitable[None]]) -> None:
         if self.loop:
@@ -319,103 +445,188 @@ class Engine:
             self.session_hotkey.set_recording(False)
             await self.broadcast({"type": "notice", "text": str(exc)})
 
-    async def api_session_start(self, title: str = "") -> dict[str, Any]:
+    # --- session lifecycle ---------------------------------------------------
+    def _session_source(self, source: str | None) -> str:
+        source = source or self.settings.get("session_source") or "both"
+        if source not in SESSION_SOURCES:
+            raise ValueError(f"Unbekannte Quelle: {source}")
+        if source == "both" and not self.settings.get("session_system_audio", True):
+            return "mic"  # older setting: system audio switched off
+        return source
+
+    async def api_session_start(
+        self, title: str = "", language: str | None = None, terms: str = "", source: str | None = None,
+    ) -> dict[str, Any]:
         store = self._require_store()
         if self.session_id is not None:
             raise ValueError("Es läuft schon eine Sitzung")
         if not self.transcriber or self.state not in ("idle", "error"):
             raise ValueError("Bitte warte, bis Murmel bereit ist")
+        source = self._session_source(source)
+        language = (language or self.settings["language"]).strip()
+        terms = ", ".join(t for t in (x.strip() for x in re.split(r"[,;\n]", terms or "")) if t)
         started = time.time()
         name = title.strip() or time.strftime("Sitzung %d.%m.%Y %H:%M", time.localtime(started))
-        session = store.create_session(name, started, self.settings["language"])
-        wav = None
+        session = store.create_session(name, started, language, source=source, terms=terms)
+        live = _LiveSession(session["id"], source, language, [t.strip() for t in terms.split(",") if t.strip()])
+        notices: list[str] = []
         try:
-            wav = self._open_session_audio(session["id"])
-            self.recorder.start(self.settings.get("mic_device"))
+            if source in ("both", "desktop"):
+                try:
+                    self._system_recorder.start(loopback=True)
+                except Exception as exc:
+                    raise ValueError(
+                        f"Desktop-Audio konnte nicht starten: {exc}. Prüfe, ob ein Wiedergabegerät aktiv ist."
+                    ) from exc
+                live.streams.append(_SessionStream("them", self._system_recorder, Segmenter()))
+            if source in ("both", "mic"):
+                try:
+                    self.recorder.start(self.settings.get("mic_device"), fill_gaps=True)
+                except Exception as exc:
+                    if source == "mic":
+                        raise ValueError(f"Aufnahme konnte nicht starten: {exc}") from exc
+                    log.exception("Mikrofon konnte nicht starten, Sitzung läuft nur mit Desktop-Audio")
+                    notices.append(f"Mikrofon nicht verfügbar ({exc}), aufgenommen wird nur das Desktop-Audio.")
+                else:
+                    live.streams.insert(0, _SessionStream("you", self.recorder, Segmenter()))
+            self._open_session_audio(live)
         except Exception as exc:
-            if wav:
-                wav.close()
+            for stream in live.streams:
+                with contextlib.suppress(Exception):
+                    stream.recorder.stop()
+            live.close_audio()
             store.finish_session(session["id"], time.time(), "error")
-            raise ValueError(f"Aufnahme konnte nicht starten: {exc}") from exc
-        streams = self._start_session_streams()
+            raise exc if isinstance(exc, ValueError) else ValueError(f"Aufnahme konnte nicht starten: {exc}") from exc
         self.session_id = session["id"]
+        self._live = live
         self._session_running = True
-        self._session_wav = wav
         self.session_hotkey.set_recording(True)
-        self._session_task = asyncio.create_task(self._session_loop(session["id"], streams))
-        await self.broadcast({"type": "session_status", "session": session})
-        if len(streams) == 1 and self.settings.get("session_system_audio"):
-            await self.broadcast({"type": "notice", "text": "Systemaudio ist nicht verfügbar, nur dein Mikrofon wird aufgenommen"})
-        return session
-
-    def _start_session_streams(self) -> list["_SessionStream"]:
-        """Microphone is 'you'. System audio (the other side of a call) is 'them' and is optional."""
-        streams = [_SessionStream("you", self.recorder, Segmenter())]
-        if self.settings.get("session_system_audio"):
-            try:
-                self._system_recorder.start(loopback=True)
-            except Exception:  # noqa: BLE001 - the session keeps going with the microphone alone
-                log.exception("Systemaudio-Aufnahme konnte nicht starten")
-            else:
-                streams.append(_SessionStream("them", self._system_recorder, Segmenter()))
-        return streams
+        self._session_task = asyncio.create_task(self._session_loop(live))
+        self._session_levels_task = asyncio.create_task(self._session_level_loop(live))
+        await self._broadcast_session(session["id"])
+        for text in notices:
+            await self.broadcast({"type": "notice", "text": text})
+        return self._session_payload(session["id"])
 
     async def api_session_stop(self) -> dict[str, Any]:
         if self.session_id is None or self._session_task is None:
-            raise ValueError("Keine Sitzung aktiv")
+            raise ValueError("Es läuft keine Sitzung")
         session_id = self.session_id
         self._session_running = False
         self.session_hotkey.set_recording(False)
         await self._session_task
-        return self._require_store().get_session(session_id)
+        return self._session_payload(session_id)
 
-    def _open_session_audio(self, session_id: int) -> audio.WavWriter | None:
+    def _open_session_audio(self, live: "_LiveSession") -> None:
+        """Mixed track (the session's main file) plus one file per source, all crash-safe."""
         if not (self.settings.get("session_keep_audio") and self.account_dir):
-            return None
-        path = self.account_dir / "audio" / f"session-{session_id}.wav"
-        self._require_store().set_session_audio(session_id, str(path))
-        return audio.WavWriter(path)
+            return
+        main = self.account_dir / "audio" / f"session-{live.id}.wav"
+        live.mix = audio.WavWriter(main)
+        if len(live.streams) > 1:
+            for stream in live.streams:
+                live.tracks[stream.speaker] = audio.WavWriter(_track_path(main, stream.speaker))
+        self._require_store().set_session_audio(live.id, str(main))
 
-    async def _session_loop(self, session_id: int, streams: list["_SessionStream"]) -> None:
+    async def _session_loop(self, live: "_LiveSession") -> None:
+        """Capture only: drain, write audio, cut segments. Transcription runs in its own worker, so a slow
+        transcription never delays the audio files or the watchdog."""
         store = self._require_store()
+        worker = asyncio.create_task(self._session_worker(live))
+        status = "done"
+        failures = 0
         try:
             while self._session_running:
                 await asyncio.sleep(SESSION_TICK_S)
-                for stream in streams:
-                    await self._session_feed(session_id, stream, stream.recorder.drain())
-                    await self._session_preview(session_id, stream)
-            for stream in streams:
-                await self._session_feed(session_id, stream, stream.recorder.stop())
-                last = stream.segmenter.flush()
-                if last:
-                    await self._session_save(session_id, stream.speaker, last)
-            store.finish_session(session_id, time.time(), "done")
-            if self.settings["llm"].get("enabled"):
-                await self._run_summary(session_id)
-        except Exception:  # noqa: BLE001 - keep the engine alive, the session is marked as failed
+                try:
+                    self._session_capture(live, final=False)
+                    await self._session_watchdog(live)
+                    for stream in live.streams:
+                        self._session_preview_soon(live, stream)
+                    failures = 0
+                except Exception as exc:  # noqa: BLE001 - one bad tick must not end a lecture
+                    failures += 1
+                    log.exception("Fehler in der Sitzungsschleife (%d in Folge)", failures)
+                    if failures == 1:
+                        await self._session_warn(live, "loop_error", f"Kurzer Aufnahmefehler: {exc}. Die Aufnahme läuft weiter.")
+                    if failures >= MAX_TICK_FAILURES:
+                        raise
+            self._session_capture(live, final=True)
+        except Exception:  # noqa: BLE001 - keep the engine alive, keep what was recorded
             log.exception("Sitzung fehlgeschlagen")
-            store.finish_session(session_id, time.time(), "error")
+            status = "interrupted"
         finally:
-            for stream in streams:
+            for stream in live.streams:
                 if stream.recorder.active:
-                    stream.recorder.stop()
-            if self._session_wav:
-                self._session_wav.close()
-                self._session_wav = None
-            self.session_id = None
+                    with contextlib.suppress(Exception):
+                        stream.recorder.stop()
+            live.close_audio()
+        store.set_session_ended(live.id, time.time())
+        await self.broadcast({"type": "session_finishing", "session_id": live.id, "remaining_s": round(live.queued_s, 1)})
+        live.queue.put_nowait(None)
+        try:
+            await worker
+        except Exception:  # noqa: BLE001
+            log.exception("Transkription der Sitzung fehlgeschlagen")
+            status = "interrupted"
+        if self._session_levels_task:
+            self._session_levels_task.cancel()
+        store.set_session_status(live.id, status)
+        self.session_id = None
+        self._live = None
         self._prune_session_audio(store)
-        await self.broadcast({"type": "session_status", "session": store.get_session(session_id)})
+        await self._broadcast_session(live.id)
 
-    async def _session_feed(self, session_id: int, stream: "_SessionStream", samples: np.ndarray) -> None:
-        if stream.speaker == "you" and self._session_wav and samples.size:  # the saved audio is the microphone
-            self._session_wav.write(samples)
-        for segment in stream.segmenter.feed(samples):
-            await self._session_save(session_id, stream.speaker, segment)
+    def _session_capture(self, live: "_LiveSession", final: bool) -> None:
+        drained = {}
+        for stream in live.streams:
+            samples = stream.recorder.stop() if final else stream.recorder.drain()
+            drained[stream.speaker] = samples
+            writer = live.tracks.get(stream.speaker)
+            if writer:
+                writer.write(samples)
+            segments = stream.segmenter.feed(samples)
+            if final and (last := stream.segmenter.flush()):
+                segments.append(last)
+            for segment in segments:
+                live.enqueue(stream.speaker, segment)
+        live.write_mix(drained, final)
 
-    async def _session_preview(self, session_id: int, stream: "_SessionStream") -> None:
-        """Provisional text for the speech that is not cut yet. The final segment replaces it when the pause comes."""
-        if not self.settings.get("session_live_preview"):
+    async def _session_worker(self, live: "_LiveSession") -> None:
+        """Transcribes the queued segments one by one. A failing segment is skipped, the next ones still run;
+        the audio is kept, so 'Transkript neu erzeugen' can fill the gap later."""
+        while (item := await live.queue.get()) is not None:
+            speaker, segment = item
+            try:
+                await self._session_save(live, speaker, segment)
+                if live.transcribe_failed:
+                    live.transcribe_failed = False
+                    await self._session_clear(live, "transcribe_error")
+            except Exception as exc:  # noqa: BLE001 - keep transcribing the rest of the lecture
+                log.exception("Abschnitt %.0f-%.0f s nicht transkribiert", segment.start_s, segment.end_s)
+                if not live.transcribe_failed:
+                    live.transcribe_failed = True
+                    await self._session_warn(
+                        live, "transcribe_error",
+                        f"Ein Abschnitt konnte nicht transkribiert werden ({exc}). Das Audio ist gespeichert, "
+                        "nach der Aufnahme hilft „Transkript neu erzeugen“.",
+                    )
+            finally:
+                live.queued_s = max(0.0, live.queued_s - (segment.end_s - segment.start_s))
+
+    async def _session_warn(self, live: "_LiveSession", kind: str, text: str) -> None:
+        await self.broadcast({"type": "session_warning", "session_id": live.id, "kind": kind, "text": text})
+
+    async def _session_clear(self, live: "_LiveSession", kind: str) -> None:
+        await self.broadcast({"type": "session_warning", "session_id": live.id, "kind": "clear", "clears": kind})
+
+    def _session_preview_soon(self, live: "_LiveSession", stream: "_SessionStream") -> None:
+        """Provisional text for the speech that is not cut yet; runs in the background and never overlaps itself."""
+        if not self.settings.get("session_live_preview") or stream.preview_task and not stream.preview_task.done():
             return
+        stream.preview_task = asyncio.create_task(self._session_preview(live, stream))
+
+    async def _session_preview(self, live: "_LiveSession", stream: "_SessionStream") -> None:
         now = time.monotonic()
         if now - stream.last_preview < PREVIEW_INTERVAL_S:
             return
@@ -423,67 +634,186 @@ class Engine:
         start_s, tail = stream.segmenter.pending(int(PREVIEW_WINDOW_S * audio.SAMPLE_RATE))
         text = ""
         if tail.size >= int(PREVIEW_MIN_S * audio.SAMPLE_RATE) and not audio.is_silent(tail):
-            text = await asyncio.to_thread(self._transcribe_session_segment, tail)
+            text = await asyncio.to_thread(self._transcribe_session_segment, live, tail)
         await self.broadcast({
-            "type": "session_preview", "session_id": session_id, "speaker": stream.speaker,
+            "type": "session_preview", "session_id": live.id, "speaker": stream.speaker,
             "start_s": start_s, "text": text,
         })
 
-    async def _session_save(self, session_id: int, speaker: str, segment: Segment) -> None:
+    async def _session_save(self, live: "_LiveSession", speaker: str, segment: Segment) -> None:
         if segment.end_s - segment.start_s < MIN_DURATION_S:  # too short to transcribe reliably
             return
-        text = await asyncio.to_thread(self._transcribe_session_segment, segment.samples)
+        text = await asyncio.to_thread(self._transcribe_session_segment, live, segment.samples)
         if not text:
             return
-        row = self._require_store().add_session_segment(
-            session_id, segment.start_s, segment.end_s, text, speaker=speaker
-        )
-        await self.broadcast({"type": "session_segment", "session_id": session_id, "segment": row})
+        row = self._require_store().add_session_segment(live.id, segment.start_s, segment.end_s, text, speaker=speaker)
+        await self.broadcast({"type": "session_segment", "session_id": live.id, "segment": row})
 
-    def _transcribe_session_segment(self, samples: np.ndarray) -> str:
+    def _transcribe_session_segment(self, live: "_LiveSession | _JobContext", samples: np.ndarray) -> str:
         s = self.settings
         store = self._require_store()
-        result = self.transcriber.transcribe(samples, s["language"], s["beam_size"], store.vocabulary())
-        text = textproc.remove_fillers(result.text) if s["remove_fillers"] else result.text
+        vocabulary = [*live.terms, *store.vocabulary()]
+        result = self.transcriber.transcribe(samples, live.language, s["beam_size"], vocabulary, strict=True)
+        text = textproc.strip_hallucinations(result.text)
+        text = textproc.remove_fillers(text) if s["remove_fillers"] else text
         return textproc.apply_corrections(text, store.corrections()).strip()
 
-    async def _run_summary(self, session_id: int) -> None:
-        store = self._require_store()
-        store.set_session_status(session_id, "processing")
-        text = " ".join(seg["text"] for seg in store.session_segments(session_id))
-        try:
-            summary, items = await asyncio.to_thread(llm.summarize_session, text, self.settings["llm"])
-        except Exception:  # noqa: BLE001 - the transcript stays usable without a summary
-            log.exception("Zusammenfassung fehlgeschlagen")
-            store.set_session_status(session_id, "error")
-            return
-        store.set_session_summary(session_id, summary, items)
-        store.set_session_status(session_id, "done")
+    # --- session watchdog and meters ------------------------------------------
+    async def _session_watchdog(self, live: "_LiveSession") -> None:
+        now = time.monotonic()
+        for stream in live.streams:
+            healthy = getattr(stream.recorder, "healthy", lambda: True)()
+            if not healthy:
+                await self._session_reconnect(live, stream, "Stream unterbrochen")
+                continue
+            if stream.speaker == "them" and now - live.device_checked >= DEVICE_CHECK_S:
+                live.device_checked = now
+                try:
+                    current = await asyncio.to_thread(audio.default_loopback_name)
+                except Exception:  # noqa: BLE001 - no playback device at the moment
+                    current = ""
+                recorded = getattr(stream.recorder, "device_name", "")
+                if current and recorded and current != recorded:
+                    await self._session_reconnect(live, stream, f"Wiedergabegerät gewechselt zu {current}")
+        await self._session_silence_check(live, now)
 
-    @staticmethod
-    def _prune_session_audio(store: Store) -> None:
+    async def _session_reconnect(self, live: "_LiveSession", stream: "_SessionStream", reason: str) -> None:
+        label = "Desktop-Audio" if stream.speaker == "them" else "Mikrofon"
+        try:
+            await asyncio.to_thread(stream.recorder.restart)
+        except Exception as exc:  # noqa: BLE001 - try again on the next tick
+            log.warning("%s: Neuverbindung fehlgeschlagen: %s", label, exc)
+            if not stream.reconnect_failed:
+                stream.reconnect_failed = True
+                await self._session_warn(
+                    live, f"stream_lost_{stream.speaker}",
+                    f"{label} ist ausgefallen ({reason}). Murmel versucht weiter, es neu zu verbinden.",
+                )
+            return
+        if stream.reconnect_failed:
+            stream.reconnect_failed = False
+            await self._session_clear(live, f"stream_lost_{stream.speaker}")
+        device = getattr(stream.recorder, "device_name", "")
+        text = f"{label} neu verbunden ({reason})" + (f": {device}" if device else "")
+        log.info(text)
+        at = stream.segmenter.position_s
+        row = self._require_store().add_session_segment(live.id, at, at, text, speaker="system")
+        await self.broadcast({"type": "session_segment", "session_id": live.id, "segment": row})
+        await self.broadcast({"type": "notice", "text": text})
+
+    async def _session_silence_check(self, live: "_LiveSession", now: float) -> None:
+        stream = next((s for s in live.streams if s.speaker == "them"), None)
+        if not stream:
+            return
+        level_at = getattr(stream.recorder, "level_at", 0.0)
+        level_db = getattr(stream.recorder, "level_db", audio.SILENCE_DB)
+        if level_at and now - level_at < 1.0 and level_db > SILENT_DB:
+            live.desktop_loud_at = now
+        silent_for = now - live.desktop_loud_at
+        if silent_for >= DESKTOP_SILENT_WARN_S and not live.silence_warned:
+            live.silence_warned = True
+            device = getattr(stream.recorder, "device_name", "") or "unbekannt"
+            await self._session_warn(
+                live, "desktop_silent",
+                f"Desktop-Audio seit {int(silent_for)} s stumm. Aufgenommen wird: {device}. "
+                "Läuft der Ton über ein anderes Gerät, dieses in Windows als Standard-Ausgabe wählen.",
+            )
+        elif silent_for < DESKTOP_SILENT_WARN_S and live.silence_warned:
+            live.silence_warned = False
+            await self._session_clear(live, "desktop_silent")
+
+    async def _session_level_loop(self, live: "_LiveSession") -> None:
+        scalers = {s.speaker: audio.LevelScaler() for s in live.streams}
+        while True:
+            await asyncio.sleep(SESSION_LEVEL_INTERVAL_S)
+            now = time.monotonic()
+            levels = {}
+            for stream in live.streams:
+                fresh = now - getattr(stream.recorder, "level_at", 0.0) < 0.5
+                db = getattr(stream.recorder, "level_db", audio.SILENCE_DB) if fresh else audio.SILENCE_DB
+                levels[stream.speaker] = round(scalers[stream.speaker].scale(float(db)), 3) if fresh else 0.0
+            await self.broadcast({
+                "type": "session_levels", "session_id": live.id, "levels": levels,
+                "lag_s": round(live.queued_s, 1), "elapsed_s": round(time.time() - live.started, 1),
+            })
+
+    # --- session data -----------------------------------------------------------
+    def _stt_info(self) -> dict[str, Any]:
+        t = self.transcriber
+        if not t:
+            return {"model": "", "device": "", "fallback": False}
+        fallback = t.device == "cpu" and self.settings.get("device") in ("auto", "cuda")
+        return {"model": t.model_name, "device": t.device, "fallback": fallback}
+
+    def _session_payload(self, session_id: int) -> dict[str, Any]:
+        store = self._require_store()
+        session = store.get_session(session_id)
+        files = _session_files(session)
+        return {
+            **session, "stt": self._stt_info(), "busy": session_id in self._jobs,
+            "audio": {k: str(v) for k, v in files.items() if v.exists()},
+        }
+
+    async def _broadcast_session(self, session_id: int) -> None:
+        await self.broadcast({"type": "session_status", "session": self._session_payload(session_id)})
+
+    def _prune_session_audio(self, store: Store) -> None:
         for session_id, path in store.session_audio_paths_beyond(SESSION_KEEP_AUDIO):
-            Path(path).unlink(missing_ok=True)
+            if session_id in self._jobs:
+                continue
+            for file in _audio_family(Path(path)):
+                file.unlink(missing_ok=True)
             store.clear_session_audio_path(session_id)
 
+    def _repair_session_audio(self) -> None:
+        """WAV files of sessions cut off by a crash get valid headers again, so they open and can be re-run."""
+        if not self.store:
+            return
+        for session in self.store.list_sessions(500):
+            if session["status"] == "interrupted" and session.get("audio_path"):
+                for file in _audio_family(Path(session["audio_path"])):
+                    if file.exists() and audio.repair_wav(file):
+                        log.info("WAV repariert: %s", file)
+
     async def api_session_list(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
-        return self._require_store().list_sessions(limit, offset)
+        sessions = self._require_store().list_sessions(limit, offset)
+        return [{**s, "busy": s["id"] in self._jobs} for s in sessions]
 
     async def api_session_get(self, id: int) -> dict[str, Any]:  # noqa: A002
         store = self._require_store()
-        return {**store.get_session(id), "segments": store.session_segments(id)}
+        return {**self._session_payload(id), "segments": store.session_segments(id)}
 
     async def api_session_update_notes(self, id: int, notes: str) -> dict[str, Any]:  # noqa: A002
         store = self._require_store()
         store.update_session_notes(id, notes)
         return store.get_session(id)
 
+    async def api_session_rename(self, id: int, title: str) -> dict[str, Any]:  # noqa: A002
+        title = title.strip()
+        if not title:
+            raise ValueError("Der Titel darf nicht leer sein")
+        self._require_store().update_session_title(id, title[:200])
+        await self._broadcast_session(id)
+        return self._session_payload(id)
+
     async def api_session_delete(self, id: int) -> None:  # noqa: A002
         if id == self.session_id:
             raise ValueError("Die laufende Sitzung kann nicht gelöscht werden")
+        if id in self._jobs:
+            raise ValueError("Die Sitzung wird gerade verarbeitet")
         path = self._require_store().delete_session(id)
         if path:
-            Path(path).unlink(missing_ok=True)
+            for file in _audio_family(Path(path)):
+                file.unlink(missing_ok=True)
+
+    async def api_session_export(self, id: int, format: str = "md") -> dict[str, str]:  # noqa: A002
+        store = self._require_store()
+        session, segments = store.get_session(id), store.session_segments(id)
+        if format == "md":
+            return {"filename": export.filename(session, "md"), "content": export.to_markdown(session, segments)}
+        if format == "txt":
+            return {"filename": export.filename(session, "txt"), "content": export.to_text(session, segments)}
+        raise ValueError(f"Unbekanntes Format: {format}")
 
     async def api_session_summarize(self, id: int) -> dict[str, Any]:  # noqa: A002
         store = self._require_store()
@@ -491,10 +821,104 @@ class Engine:
             raise ValueError("Die laufende Sitzung kann noch nicht zusammengefasst werden")
         if not self.settings["llm"].get("enabled"):
             raise ValueError("Die KI-Zusammenfassung ist deaktiviert")
-        await self._run_summary(id)
+        text = " ".join(seg["text"] for seg in store.session_segments(id) if seg["speaker"] != "system")
+        try:
+            summary, items = await asyncio.to_thread(llm.summarize_session, text, self.settings["llm"])
+        except Exception as exc:  # the transcript stays untouched, only the summary failed
+            log.exception("Zusammenfassung fehlgeschlagen")
+            raise ValueError(f"Zusammenfassung fehlgeschlagen: {exc}") from exc
+        store.set_session_summary(id, summary, items)
+        await self._broadcast_session(id)
+        return self._session_payload(id)
+
+    # --- re-run and import ------------------------------------------------------
+    async def api_session_retranscribe(self, id: int) -> dict[str, Any]:  # noqa: A002
+        """Transcribe a finished session again from its audio files, e.g. after a crash or with new terms."""
+        store = self._require_store()
+        if id == self.session_id:
+            raise ValueError("Die laufende Sitzung kann nicht neu transkribiert werden")
+        if id in self._jobs:
+            raise ValueError("Die Sitzung wird schon verarbeitet")
+        if not self.transcriber:
+            raise ValueError("Bitte warte, bis Murmel bereit ist")
         session = store.get_session(id)
-        await self.broadcast({"type": "session_status", "session": session})
-        return session
+        tracks = _retranscribe_tracks(session)
+        if not tracks:
+            raise ValueError("Zu dieser Sitzung gibt es keine Audiodatei")
+        self._start_job(session, tracks)
+        return self._session_payload(id)
+
+    async def api_session_import(self, path: str, title: str = "") -> dict[str, Any]:
+        """A recording made elsewhere (OBS, Windows recorder) becomes a session with its own transcript."""
+        store = self._require_store()
+        if not self.transcriber or not self.account_dir:
+            raise ValueError("Bitte warte, bis Murmel bereit ist")
+        source_path = Path(path)
+        if not source_path.is_file():
+            raise ValueError("Datei nicht gefunden")
+        started = source_path.stat().st_mtime
+        name = title.strip() or source_path.stem
+        session = store.create_session(name, started, self.settings["language"], source="import", status="processing")
+        main = self.account_dir / "audio" / f"session-{session['id']}.wav"
+        try:
+            seconds = await asyncio.to_thread(_convert_to_wav, source_path, main)
+        except Exception as exc:
+            store.finish_session(session["id"], time.time(), "error")
+            await self._broadcast_session(session["id"])
+            raise ValueError(f"Datei konnte nicht gelesen werden: {exc}") from exc
+        store.set_session_audio(session["id"], str(main))
+        store.finish_session(session["id"], started + seconds, "processing")
+        session = store.get_session(session["id"])
+        self._start_job(session, [("them", main)])
+        return self._session_payload(session["id"])
+
+    def _start_job(self, session: dict[str, Any], tracks: list[tuple[str, Path]]) -> None:
+        previous = session["status"] if session["status"] not in ("processing", "recording") else "done"
+        self._jobs[session["id"]] = asyncio.create_task(self._run_job(session, tracks, previous))
+
+    async def _run_job(self, session: dict[str, Any], tracks: list[tuple[str, Path]], previous: str) -> None:
+        store = self._require_store()
+        session_id = session["id"]
+        terms = [t.strip() for t in (session.get("terms") or "").split(",") if t.strip()]
+        ctx = _JobContext(session.get("language") or self.settings["language"], terms)
+        store.set_session_status(session_id, "processing")
+        await self._broadcast_session(session_id)
+        try:
+            total = 0.0
+            for _speaker, path in tracks:
+                await asyncio.to_thread(audio.repair_wav, path)
+                total += await asyncio.to_thread(_wav_seconds, path)
+            total = total or 1.0
+            done = 0.0
+            rows: list[tuple[str, float, float, str]] = []
+            for speaker, path in tracks:
+                segmenter = Segmenter()
+                chunks = audio.read_wav_chunks(path)
+                while True:
+                    chunk = await asyncio.to_thread(next, chunks, None)
+                    pieces = segmenter.feed(chunk) if chunk is not None else [p for p in [segmenter.flush()] if p]
+                    for piece in pieces:
+                        if piece.end_s - piece.start_s >= MIN_DURATION_S:
+                            text = await asyncio.to_thread(self._transcribe_session_segment, ctx, piece.samples)
+                            if text:
+                                rows.append((speaker, piece.start_s, piece.end_s, text))
+                    if chunk is None:
+                        break
+                    done += chunk.size / audio.SAMPLE_RATE
+                    await self.broadcast({
+                        "type": "session_progress", "session_id": session_id,
+                        "progress": round(min(1.0, done / total), 3),
+                    })
+            rows.sort(key=lambda r: r[1])
+            store.replace_session_segments(session_id, rows)
+            store.set_session_status(session_id, "done")
+        except Exception as exc:  # noqa: BLE001 - the old transcript is still there
+            log.exception("Neu-Transkription fehlgeschlagen")
+            store.set_session_status(session_id, previous)
+            await self.broadcast({"type": "notice", "text": f"Neu-Transkription fehlgeschlagen: {exc}"})
+        finally:
+            self._jobs.pop(session_id, None)
+        await self._broadcast_session(session_id)
 
     # --- broadcasting ------------------------------------------------------
     @staticmethod

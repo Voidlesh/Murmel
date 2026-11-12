@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from engine.audio import SAMPLE_RATE
-from engine.sessions import SEGMENT_MAX_S, SEGMENT_MIN_S, Segmenter
+from engine.sessions import SEGMENT_MAX_S, SEGMENT_MIN_S, SOFT_CUT_WINDOW_S, Segmenter
 
 
 def tone(seconds: float) -> np.ndarray:
@@ -29,11 +29,22 @@ def test_cuts_in_the_middle_of_a_pause():
     assert rest.start_s == pytest.approx(out[0].end_s)
 
 
-def test_hard_cut_at_maximum_without_pause():
+def test_cut_without_pause_stays_within_the_maximum():
     out = Segmenter().feed(tone(SEGMENT_MAX_S + 2))
 
     assert len(out) == 1
-    assert out[0].end_s == pytest.approx(SEGMENT_MAX_S)
+    assert SEGMENT_MAX_S - SOFT_CUT_WINDOW_S <= out[0].end_s <= SEGMENT_MAX_S
+
+
+def test_cut_without_pause_lands_on_the_quietest_moment():
+    loud = tone(SEGMENT_MAX_S + 2)
+    dip_at = 27.0
+    start = int(dip_at * SAMPLE_RATE)
+    loud[start:start + int(0.2 * SAMPLE_RATE)] *= 0.1  # quieter, but no real pause
+
+    out = Segmenter().feed(loud)
+
+    assert out[0].end_s == pytest.approx(dip_at + 0.05, abs=0.1)
 
 
 def test_short_pause_does_not_cut():
