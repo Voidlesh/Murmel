@@ -481,7 +481,7 @@ def test_slow_device_query_does_not_block_the_tick(engine, monkeypatch):
     monkeypatch.setattr(server, "DEVICE_CHECK_S", 0.0)
 
     def slow():
-        time.sleep(3)
+        time.sleep(8)  # far longer than a session tick plus the up to one tick the loop needs to notice a stop
         return "Fake"
 
     monkeypatch.setattr(server.audio, "default_loopback_name", slow)
@@ -497,7 +497,7 @@ def test_slow_device_query_does_not_block_the_tick(engine, monkeypatch):
     session, finished, took = asyncio.run(scenario())
     assert finished["status"] == "done"
     assert len(engine.store.session_segments(session["id"])) == 2
-    assert took < 2.9  # the session did not wait for the slow child process
+    assert took < 5.0  # the session did not wait for the slow child process
 
 
 def test_live_text_is_on_by_default_for_sessions(engine):
