@@ -371,6 +371,8 @@ function openStartDialog() {
       <label class="field"><span>Fachbegriffe <small>(optional, mit Komma getrennt)</small></span>
         <textarea class="textarea" name="terms" rows="2" placeholder="Eigenwert, Diagonalisierung, Jordan-Normalform"></textarea></label>
       <div id="start-stt"></div>
+      <label class="source-option"><input type="checkbox" name="live" ${s.session_live_text === false ? '' : 'checked'} />
+        <span><b>Live-Text beim Sprechen</b><small>Der Satz erscheint, während er gesprochen wird. Braucht etwas mehr Rechenleistung der Grafikkarte.</small></span></label>
       <p class="hint-text">Tipp: Starte die Sitzung erst, wenn Kopfhörer verbunden sind und der Ton der Vorlesung läuft.</p>
       <div class="modal-actions"><button type="button" class="btn btn-ghost" data-close>Abbrechen</button>
         <button type="submit" class="btn btn-light" id="start-ok"><span class="ic i-mic"></span>Aufnahme starten</button></div>
@@ -387,13 +389,14 @@ function openStartDialog() {
       source: String(form.get('source') || 'both'),
       language: String(form.get('language') || 'de'),
       terms: String(form.get('terms') || ''),
+      live: form.get('live') === 'on',
     };
     const button = el.querySelector('#start-ok');
     button.disabled = true;
     try {
-      if (params.source !== ctx.settings?.session_source) {
-        // only remembers the choice for next time, must never block the recording
-        await ctx.saveSettings({ session_source: params.source }).catch(() => {});
+      if (params.source !== ctx.settings?.session_source || params.live !== (ctx.settings?.session_live_text !== false)) {
+        // only remembers the choices for next time, must never block the recording
+        await ctx.saveSettings({ session_source: params.source, session_live_text: params.live }).catch(() => {});
       }
       live = freshLive();
       const started = await ctx.call('session_start', params);

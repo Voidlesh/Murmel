@@ -33,7 +33,8 @@ DEFAULTS: dict[str, Any] = {
     "session_keep_audio": True,
     "session_system_audio": True,  # the other side of a call, via WASAPI loopback
     "session_source": "both",  # both | desktop | mic: what a new session records by default
-    "session_live_preview": False,  # provisional text while someone is still speaking (uses more compute)
+    "session_live_preview": False,  # provisional text while dictating with the key held (uses more compute)
+    "session_live_text": True,  # notes sessions: text appears while someone is still speaking; chosen per session at the start
     "remove_fillers": True,
     "voice_commands": True,
     "typing_wpm": 40,

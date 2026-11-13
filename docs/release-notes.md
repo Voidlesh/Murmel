@@ -1,5 +1,6 @@
 ## Murmel 1.1.2
 
+- **Live-Transkript in Notiz-Sitzungen:** Der Text erscheint, während er gesprochen wird, nicht erst nach der Sprechpause. Im Startdialog lässt sich das pro Sitzung abschalten. Fertige Abschnitte haben Vorrang: Hängt das Transkript hinterher, pausiert der Live-Text.
 - Die Startseite zählt unter „Wörter gesamt“ jetzt auch die Wörter aus Notiz-Sitzungen und zeigt darunter „davon … in Notizen“. Tagesziel, Streak und Stimmprofil zählen weiter nur Diktate.
 
 ## Murmel 1.1.1

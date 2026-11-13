@@ -51,7 +51,7 @@ export function init(el, context) {
         <div class="hotkey-picker"><span class="kbd" id="set-session-label"></span>
           <button class="btn" id="set-session-record"><span class="ic i-keyboard"></span>Aufnehmen</button>
           <button class="btn btn-ghost" id="set-session-clear" title="Sitzungs-Taste entfernen" aria-label="Sitzungs-Taste entfernen"><span class="ic i-x"></span></button></div></div>
-      <div class="setting-row"><div><b>Live-Transkript</b><p class="hint-text">Zeigt beim Diktieren und in Sitzungen schon beim Sprechen mit, was du sagst. Braucht mehr Rechenleistung.</p></div>
+      <div class="setting-row"><div><b>Live-Transkript beim Diktieren</b><p class="hint-text">Zeigt beim Diktieren schon beim Sprechen mit, was du sagst. Für Notiz-Sitzungen wählst du das beim Start. Braucht mehr Rechenleistung.</p></div>
         <label class="switch"><input type="checkbox" id="set-live"/><i></i></label></div>
       <div class="setting-row"><div><b>Tippen für Freihand-Modus</b><p class="hint-text">Kurzes Antippen startet eine Aufnahme ohne Halten.</p></div>
         <label class="switch"><input type="checkbox" id="set-tap"/><i></i></label></div>
