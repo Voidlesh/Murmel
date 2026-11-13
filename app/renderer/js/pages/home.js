@@ -76,6 +76,7 @@ function render() {
       <aside class="home-side">
         <div class="card stats-card">
           <div class="stat-line"><span class="serif stat-num" id="s-words">0</span><span>Wörter gesamt</span></div>
+          <p class="hint-text" id="s-words-note" hidden></p>
           <div class="stat-line"><span class="serif stat-num" id="s-wpm">0</span><span>WPM</span></div>
           <div class="stat-line"><span class="serif stat-num" id="s-streak">0</span><span id="s-streak-label">Tage Streak</span></div>
           <div class="stats-divider"></div>
@@ -167,7 +168,12 @@ function showTips() {
 async function refreshStats() {
   try {
     const s = await ctx.call('stats', { days: null });
-    root.querySelector('#s-words').textContent = num(s.words);
+    // dictations plus notes sessions; goal, streak and the voice profile keep counting dictations only
+    const sessionWords = s.session_words || 0;
+    root.querySelector('#s-words').textContent = num(s.words + sessionWords);
+    const note = root.querySelector('#s-words-note');
+    note.hidden = sessionWords === 0;
+    note.textContent = `davon ${num(sessionWords)} in Notizen`;
     root.querySelector('#s-wpm').textContent = num(s.wpm);
     root.querySelector('#s-streak').textContent = num(s.streak);
     root.querySelector('#s-streak-label').textContent = s.streak === 1 ? 'Tag Streak' : 'Tage Streak';

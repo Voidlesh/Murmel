@@ -362,7 +362,13 @@ class Store:
         summary = summarize(rows, all_days, days, typing_wpm, today)
         summary["fixes_words"] = sum(r["fixes_words"] for r in rows)
         summary["fixes_dict"] = sum(r["fixes_dict"] for r in rows)
+        summary["session_words"] = self.session_word_count()
         return summary
+
+    def session_word_count(self) -> int:
+        """Words in the transcripts of notes sessions. Shown next to the dictation words, never mixed into goal or streak."""
+        rows = self._query("SELECT text FROM session_segments WHERE speaker != 'system'")
+        return sum(len(r["text"].split()) for r in rows)
 
     def analysis_rows(self, since: float = 0) -> list[dict[str, Any]]:
         return self._query(

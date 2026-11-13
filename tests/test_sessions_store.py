@@ -93,3 +93,12 @@ def test_segments_keep_their_speaker_and_default_to_you(store):
     speakers = [seg["speaker"] for seg in store.session_segments(session["id"])]
 
     assert speakers == ["you", "them"]
+
+
+def test_session_word_count_skips_system_notes_and_feeds_stats(store):
+    session = store.create_session("", started_at=1.0, language="de")
+    store.add_session_segment(session["id"], 0.0, 2.0, "Heute geht es um Eigenwerte", speaker="them")
+    store.add_session_segment(session["id"], 2.0, 4.0, "Ist das klausurrelevant", speaker="you")
+    store.add_session_segment(session["id"], 5.0, 5.0, "Desktop-Audio neu verbunden", speaker="system")
+    assert store.session_word_count() == 8
+    assert store.stats(days=None, typing_wpm=40)["session_words"] == 8

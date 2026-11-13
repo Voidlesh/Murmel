@@ -56,8 +56,9 @@ class _JobContext:
 class _LiveSession:
     """Everything that belongs to the running session: streams, audio files, the transcription queue."""
 
-    def __init__(self, session_id: int, source: str, language: str, terms: list[str]) -> None:
+    def __init__(self, session_id: int, source: str, language: str, terms: list[str], preview: bool = False) -> None:
         self.id = session_id
+        self.preview = preview  # show text while it is still being spoken
         self.source = source
         self.language = language
         self.terms = terms
@@ -72,6 +73,7 @@ class _LiveSession:
         self.desktop_loud_at = time.monotonic()
         self.silence_warned = False
         self.transcribe_failed = False
+        self.finishing = False
         self.device_task: asyncio.Task | None = None
         self.device_seen = ""  # answer of the last background device query, read by the next tick
 
@@ -157,6 +159,7 @@ SESSION_TICK_S = 1.0  # how often the live audio is taken from the recorder
 PREVIEW_INTERVAL_S = 0.5  # pause between live previews, one pass on the GPU takes about 0.7 s with the large model
 PREVIEW_WINDOW_S = 10.0  # a preview only transcribes the newest seconds, so it stays cheap
 PREVIEW_MIN_S = 1.0  # shorter speech is too little to show
+PREVIEW_MAX_LAG_S = 3.0  # while finished segments wait this long for the model, previews pause: the final text has priority
 DICTATION_PREVIEW_MAX_S = 30.0  # a held key rarely lasts longer, the preview shows the newest part of it
 LEVEL_INTERVAL_S = 0.1  # mean of the scaled block levels per window
 ALLOWED_ORIGINS = {None, "null", "file://"}
@@ -458,6 +461,7 @@ class Engine:
 
     async def api_session_start(
         self, title: str = "", language: str | None = None, terms: str = "", source: str | None = None,
+        live: bool | None = None,
     ) -> dict[str, Any]:
         store = self._require_store()
         if self.session_id is not None:
@@ -470,7 +474,8 @@ class Engine:
         started = time.time()
         name = title.strip() or time.strftime("Sitzung %d.%m.%Y %H:%M", time.localtime(started))
         session = store.create_session(name, started, language, source=source, terms=terms)
-        live = _LiveSession(session["id"], source, language, [t.strip() for t in terms.split(",") if t.strip()])
+        live_text = self.settings.get("session_live_text", True) if live is None else bool(live)
+        live = _LiveSession(session["id"], source, language, [t.strip() for t in terms.split(",") if t.strip()], live_text)
         notices: list[str] = []
         try:
             if source in ("both", "desktop"):
@@ -565,6 +570,7 @@ class Engine:
                     with contextlib.suppress(Exception):
                         stream.recorder.stop()
             live.close_audio()
+        live.finishing = True
         store.set_session_ended(live.id, time.time())
         await self.broadcast({"type": "session_finishing", "session_id": live.id, "remaining_s": round(live.queued_s, 1)})
         live.queue.put_nowait(None)
@@ -628,7 +634,9 @@ class Engine:
 
     def _session_preview_soon(self, live: "_LiveSession", stream: "_SessionStream") -> None:
         """Provisional text for the speech that is not cut yet; runs in the background and never overlaps itself."""
-        if not self.settings.get("session_live_preview") or stream.preview_task and not stream.preview_task.done():
+        if not live.preview or live.finishing or stream.preview_task and not stream.preview_task.done():
+            return
+        if live.queued_s > PREVIEW_MAX_LAG_S:  # the model is busy with finished segments, they come first
             return
         stream.preview_task = asyncio.create_task(self._session_preview(live, stream))
 

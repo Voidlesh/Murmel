@@ -211,7 +211,6 @@ def test_valid_session_hotkey_is_saved_and_reconnected(engine, monkeypatch):
 
 
 def test_live_preview_is_sent_while_speech_is_still_open(engine):
-    engine.settings = {**engine.settings, "session_live_preview": True}
     sent = []
 
     async def capture(msg):
@@ -233,7 +232,7 @@ def test_live_preview_is_sent_while_speech_is_still_open(engine):
     assert previews[0]["start_s"] == 0.0
 
 
-def test_live_preview_is_off_by_default(engine):
+def test_live_preview_can_be_switched_off_per_session(engine):
     sent = []
 
     async def capture(msg):
@@ -242,7 +241,7 @@ def test_live_preview_is_off_by_default(engine):
     engine.broadcast = capture
 
     async def scenario():
-        await engine.api_session_start()
+        await engine.api_session_start(live=False)
         engine.recorder.pending = tone(3)
         await asyncio.sleep(server.SESSION_TICK_S * 2)
         await engine.api_session_stop()

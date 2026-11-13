@@ -481,7 +481,7 @@ def test_slow_device_query_does_not_block_the_tick(engine, monkeypatch):
     monkeypatch.setattr(server, "DEVICE_CHECK_S", 0.0)
 
     def slow():
-        time.sleep(3)
+        time.sleep(8)  # far longer than a session tick plus the up to one tick the loop needs to notice a stop
         return "Fake"
 
     monkeypatch.setattr(server.audio, "default_loopback_name", slow)
@@ -497,4 +497,46 @@ def test_slow_device_query_does_not_block_the_tick(engine, monkeypatch):
     session, finished, took = asyncio.run(scenario())
     assert finished["status"] == "done"
     assert len(engine.store.session_segments(session["id"])) == 2
-    assert took < 2.9  # the session did not wait for the slow child process
+    assert took < 5.0  # the session did not wait for the slow child process
+
+
+def test_live_text_is_on_by_default_for_sessions(engine):
+    sent = capture(engine)
+
+    async def scenario():
+        await engine.api_session_start(source="desktop")
+        engine._system_recorder.pending = tone(4)  # speech without a pause, nothing is cut yet
+        await asyncio.sleep(server.SESSION_TICK_S * 2.5)
+        await engine.api_session_stop()
+
+    asyncio.run(scenario())
+    previews = [m for m in sent if m["type"] == "session_preview" and m["speaker"] == "them"]
+    assert previews and previews[0]["text"].startswith("abschnitt")
+
+
+def test_live_text_waits_while_finished_segments_are_queued(engine, monkeypatch):
+    sent = capture(engine)
+
+    async def scenario():
+        await engine.api_session_start(source="desktop")
+        engine._live.queued_s = server.PREVIEW_MAX_LAG_S + 1  # the model is behind
+        engine._system_recorder.pending = tone(4)
+        await asyncio.sleep(server.SESSION_TICK_S * 2.5)
+        await engine.api_session_stop()
+
+    asyncio.run(scenario())
+    assert not [m for m in sent if m["type"] == "session_preview"]
+
+
+def test_new_sessions_use_the_saved_live_choice(engine):
+    engine.settings = {**engine.settings, "session_live_text": False}
+    sent = capture(engine)
+
+    async def scenario():
+        await engine.api_session_start(source="desktop")
+        engine._system_recorder.pending = tone(4)
+        await asyncio.sleep(server.SESSION_TICK_S * 2.5)
+        await engine.api_session_stop()
+
+    asyncio.run(scenario())
+    assert not [m for m in sent if m["type"] == "session_preview"]

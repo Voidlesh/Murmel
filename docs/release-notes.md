@@ -1,3 +1,8 @@
+## Murmel 1.1.2
+
+- **Live-Transkript in Notiz-Sitzungen:** Der Text erscheint, während er gesprochen wird, nicht erst nach der Sprechpause. Im Startdialog lässt sich das pro Sitzung abschalten. Fertige Abschnitte haben Vorrang: Hängt das Transkript hinterher, pausiert der Live-Text.
+- Die Startseite zählt unter „Wörter gesamt“ jetzt auch die Wörter aus Notiz-Sitzungen und zeigt darunter „davon … in Notizen“. Tagesziel, Streak und Stimmprofil zählen weiter nur Diktate.
+
 ## Murmel 1.1.1
 
 ### Korrekturen gegenüber 1.1.0
@@ -32,4 +37,4 @@ Die Notizen-Aufnahme ist jetzt für lange Online-Vorlesungen gebaut: zuverlässi
 Die KI-Zusammenfassung ist vorerst ausgeblendet.
 
 ### Installation
-`Murmel-Setup-1.1.1.exe` herunterladen und starten. Bestehende Accounts, Verläufe und Einstellungen bleiben erhalten. Der Installer ist nicht signiert: Windows-Warnung mit *Weitere Informationen → Trotzdem ausführen* bestätigen.
+`Murmel-Setup-1.1.2.exe` herunterladen und starten. Bestehende Accounts, Verläufe und Einstellungen bleiben erhalten. Der Installer ist nicht signiert: Windows-Warnung mit *Weitere Informationen → Trotzdem ausführen* bestätigen.
